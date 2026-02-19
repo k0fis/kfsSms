@@ -34,8 +34,7 @@ public final class AppConfig {
             if (Files.exists(path)) {
                 return AppConfig.load(path);
             } else {
-                logger.warn("Warning: external config file not found: " + paramPath
-                        + " → loading default from resources");
+                logger.warn("Warning: external config file not found: '{}' loading default from resources", paramPath);
             }
         }
         return AppConfig.loadFromClasspath(fallbackResource);

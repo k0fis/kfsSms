@@ -54,6 +54,7 @@ public class AtModemSmsGateway implements SmsGateway {
         }
     }
 
+    @SuppressWarnings("java:S2925")
     private void ensureSimReady(String pin) throws ModemException {
         logger.info("check PIN");
         // 1. základní handshake

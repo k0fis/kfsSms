@@ -139,4 +139,8 @@ public class SmsApp {
             logger.warn("Invalid log level '{}', keeping default", level);
         }
     }
+
+    public static String getVersion() {
+        return SmsApp.class.getPackage().getImplementationVersion();
+    }
 }

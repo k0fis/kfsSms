@@ -41,6 +41,7 @@ public class AtCommandExecutor {
     }
 
     // Čtení dat až do očekávaného stringu
+    @SuppressWarnings("java:S2925")
     public String readUntil(String expected, Duration timeout) throws ModemException {
         InputStream is = port.getInputStream();
         long end = System.currentTimeMillis() + timeout.toMillis();
