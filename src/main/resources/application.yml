@@ -1,0 +1,24 @@
+sms:
+  portName: "/dev/ttyUSB0"
+  baudRate: 9600
+  pollIntervalMs: 5000
+  openModem: false
+  sendMaxRetries: 3
+  sendRetryDelayMs: 5000
+
+api:
+  baseUrl: "https://api.example.com"
+  user: "secret-token"
+  password: "pako"
+
+cfg:
+  terminate: "kokot"
+
+msisdn:
+  pin: "9876"
+
+logging:
+  level: "INFO"
+  packages:
+    kfs.sc.sms: DEBUG
+    kfs.sc.sms.gateway: TRACE
