@@ -43,7 +43,7 @@ jobs:
             --type exe `
             --input target `
             --name kfs-ScSms `
-            --main-jar ScSms-${{ github.ref_name }}.jar `
+            --main-jar SmsApp-${{ github.ref_name }}.jar `
             --main-class kfs.sc.sms.SmsApp `
             --app-version "${{ github.ref_name }}" `
             --win-console `
