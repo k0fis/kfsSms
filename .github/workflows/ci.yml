@@ -39,13 +39,15 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
+          $version = "${{ github.ref_name }}".Substring(1)
+          
           jpackage `
             --type exe `
             --input target `
             --name kfs-ScSms `
-            --main-jar SmsApp-${{ github.ref_name }}.jar `
+            --main-jar "SmsApp-$version.jar" `
             --main-class kfs.sc.sms.SmsApp `
-            --app-version "${{ github.ref_name }}" `
+            --app-version $version `
             --win-console `
             --dest dist
 
