@@ -7,6 +7,7 @@ import kfs.sc.sms.model.SmsMessage;
 import kfs.sc.sms.service.SmsDispatchService;
 import kfs.sc.sms.service.SmsPollingService;
 import kfs.sc.sms.service.SmsRestClient;
+import kfs.sc.sms.updater.GitHubUpdater;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,6 +31,19 @@ public class SmsApp {
         // Init logging
         initLogger(config.logging().level());
         initLoggerPackages(config.logging().packages());
+
+        // check updates
+        GitHubUpdater updater = new GitHubUpdater(
+                "k0fis",
+                "kfsSms",
+                "SmsApp.jar",
+                getVersion()
+        );
+
+        if (updater.updateIfAvailable()) {
+            logger.info("Updated. Restarting...");
+            updater.restartApplication();
+        }
 
         // SMS Gateway
         SmsGateway smsGateway = new AtModemSmsGateway(config.sms().portName());
