@@ -37,15 +37,16 @@ jobs:
 
       - name: Create Windows EXE
         if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
         run: |
-          jpackage ^
-            --type exe ^
-            --input target ^
-            --name kfs-ScSms ^
-            --main-jar kfs-ScSms-${{ github.ref_name }}.jar ^
-            --main-class kfs.sc.sms.SmsApp ^
-            --app-version ${{ github.ref_name }} ^
-            --win-console ^
+          jpackage `
+            --type exe `
+            --input target `
+            --name kfs-ScSms `
+            --main-jar kfs-ScSms-${{ github.ref_name }}.jar `
+            --main-class kfs.sc.sms.SmsApp `
+            --app-version "${{ github.ref_name }}" `
+            --win-console `
             --dest dist
 
       - name: Upload EXE artifact
