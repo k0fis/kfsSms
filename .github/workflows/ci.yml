@@ -10,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
@@ -27,19 +27,33 @@ jobs:
 
       - name: Set version from tag
         if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           mvn versions:set -DnewVersion=$VERSION -DgenerateBackupPoms=false
 
-      - name: Build and test
-        run: mvn -B clean verify
+      - name: Build fat jar
+        run: mvn -B clean package
 
-      - name: Upload build artifact
+      - name: Create Windows EXE
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          jpackage ^
+            --type exe ^
+            --input target ^
+            --name kfs-ScSms ^
+            --main-jar kfs-ScSms-${{ github.ref_name }}.jar ^
+            --main-class kfs.sc.sms.SmsApp ^
+            --app-version ${{ github.ref_name }} ^
+            --win-console ^
+            --dest dist
+
+      - name: Upload EXE artifact
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
-          name: app-jar
-          path: target/*-shaded.jar
+          name: windows-exe
+          path: dist/*.exe
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -50,12 +64,12 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: app-jar
+          name: windows-exe
           path: dist
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.jar
+          files: dist/*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
