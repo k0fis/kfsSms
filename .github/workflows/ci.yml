@@ -79,17 +79,19 @@ jobs:
         with:
           name: windows-exe
           path: dist
+          flatten: true
 
       - name: Download JAR artifact
         uses: actions/download-artifact@v4
         with:
           name: jar-artifact
-          path: target
+          path: dist
+          flatten: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "dist/*.exe target/SmsApp-*.jar"
+          files: "dist/*.exe target/*.jar"
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
