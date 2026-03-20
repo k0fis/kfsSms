@@ -29,7 +29,7 @@ class AtModemSmsGatewayTest {
         when(port.getOutputStream()).thenReturn(output);
 
         executor = mock(AtCommandExecutor.class);
-        gateway = new AtModemSmsGateway("COM1");
+        gateway = new AtModemSmsGateway("COM1", 115200);
         gateway.setExecutor(executor);
     }
 

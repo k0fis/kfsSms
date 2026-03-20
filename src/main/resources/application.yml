@@ -1,7 +1,8 @@
 sms:
   portName: "/dev/ttyUSB0"
-  baudRate: 9600
+  baudRate: 115200
   pollIntervalMs: 5000
+  outgoingPollIntervalMs: 5000
   openModem: false
   sendMaxRetries: 3
   sendRetryDelayMs: 5000

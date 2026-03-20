@@ -15,11 +15,13 @@ public class AtModemSmsGateway implements SmsGateway {
     private static final Logger logger = LoggerFactory.getLogger(AtModemSmsGateway.class);
 
     private final String portName;
+    private final int baudRate;
     private SerialPort port;
     private AtCommandExecutor executor;
 
-    public AtModemSmsGateway(String portName) {
+    public AtModemSmsGateway(String portName, int baudRate) {
         this.portName = portName;
+        this.baudRate = baudRate;
     }
 
     public void setExecutor(AtCommandExecutor executor) {
@@ -30,7 +32,7 @@ public class AtModemSmsGateway implements SmsGateway {
     public void open(String pin) throws ModemException {
         try {
             port = SerialPort.getCommPort(portName);
-            port.setBaudRate(115200);
+            port.setBaudRate(this.baudRate);
             port.setNumDataBits(8);
             port.setNumStopBits(1);
             port.setParity(SerialPort.NO_PARITY);

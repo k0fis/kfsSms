@@ -4,6 +4,7 @@ import kfs.sc.sms.at.AtModemSmsGateway;
 import kfs.sc.sms.config.AppConfig;
 import kfs.sc.sms.model.SmsGateway;
 import kfs.sc.sms.model.SmsMessage;
+import kfs.sc.sms.service.OutgoingSmsService;
 import kfs.sc.sms.service.SmsDispatchService;
 import kfs.sc.sms.service.SmsPollingService;
 import kfs.sc.sms.service.SmsRestClient;
@@ -36,17 +37,16 @@ public class SmsApp {
         GitHubUpdater updater = new GitHubUpdater(
                 "k0fis",
                 "kfsSms",
-                "SmsApp.jar",
                 getVersion()
         );
 
         if (updater.updateIfAvailable()) {
-            logger.info("Updated. Restarting...");
-            updater.restartApplication();
+            logger.info("Update downloaded. Exiting with code 42 for wrapper to swap JARs.");
+            System.exit(42);
         }
 
         // SMS Gateway
-        SmsGateway smsGateway = new AtModemSmsGateway(config.sms().portName());
+        SmsGateway smsGateway = new AtModemSmsGateway(config.sms().portName(), config.sms().baudRate());
         if (config.sms().openModem()) {
             try {
                 smsGateway.open(config.getMsisdn().pin());
@@ -81,9 +81,17 @@ public class SmsApp {
                 config.sms().sendRetryDelayMs()
         );
 
-        // Spuštění obou služeb
+        // Outgoing service (REST → modem)
+        OutgoingSmsService outgoingService = new OutgoingSmsService(
+                smsGateway,
+                smsRestClient,
+                config.sms().outgoingPollIntervalMs()
+        );
+
+        // Spuštění služeb
         pollingService.start();
         dispatchService.start();
+        outgoingService.start();
 
         CountDownLatch shutdownLatch = new CountDownLatch(1);
 
@@ -94,6 +102,7 @@ public class SmsApp {
             try {
                 pollingService.stop();
                 dispatchService.stop();
+                outgoingService.stop();
                 smsGateway.close();
             } catch (Exception e) {
                 logger.error("Error during shutdown", e);
@@ -113,6 +122,7 @@ public class SmsApp {
                             logger.info("Manual shutdown requested");
                             pollingService.stop();
                             dispatchService.stop();
+                            outgoingService.stop();
                             smsGateway.close();
                             shutdownLatch.countDown();
                             break;

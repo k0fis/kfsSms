@@ -61,7 +61,7 @@ public class SmsDispatchService {
             attempt++;
             try {
                 logger.debug("SMS try to send ({}): {}", attempt, msg);
-                client.send(msg);
+                client.reportIncoming(msg.sender(), msg.text(), msg.timestamp());
                 logger.info("SMS sent successfully: {}", msg);
                 return;
             } catch (Exception e) {

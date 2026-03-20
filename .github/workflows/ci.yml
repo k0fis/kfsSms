@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -38,29 +38,6 @@ jobs:
       - name: Build fat jar
         run: mvn -B clean package
 
-      - name: Create Windows EXE
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}".Substring(1)
-          
-          jpackage `
-            --type exe `
-            --input target `
-            --name kfs-ScSms `
-            --main-jar "SmsApp-$version.jar" `
-            --main-class kfs.sc.sms.SmsApp `
-            --app-version $version `
-            --win-console `
-            --dest dist
-
-      - name: Upload EXE artifact
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-exe
-          path: dist/*.exe
-
       - name: Upload JAR artifact
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
@@ -74,19 +51,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-exe
-          path: dist
-          flatten: true
-
       - name: Download JAR artifact
         uses: actions/download-artifact@v4
         with:
           name: jar-artifact
           path: dist
-          flatten: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -9,7 +9,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.*;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -19,20 +20,22 @@ public class GitHubUpdater {
 
     private final String owner;
     private final String repo;
-    private final String localJarName;
     private final String currentVersion;
 
     private final HttpClient client = HttpClient.newHttpClient();
 
-    public GitHubUpdater(String owner, String repo, String localJarName, String currentVersion) {
+    public GitHubUpdater(String owner, String repo, String currentVersion) {
         this.owner = owner;
         this.repo = repo;
-        this.localJarName = localJarName;
         this.currentVersion = currentVersion;
     }
 
+    /**
+     * Checks GitHub for a newer release. If found, downloads to SmsApp-new.jar and returns true.
+     * The caller (SmsApp) should exit(42) so the wrapper .bat can swap jars and restart.
+     */
     public boolean updateIfAvailable() {
-        logger.info("Checking for updates...");
+        logger.info("Checking for updates (current={})...", currentVersion);
 
         ReleaseInfo latest = fetchLatestRelease();
 
@@ -42,33 +45,17 @@ public class GitHubUpdater {
         }
 
         if (!isNewerVersion(currentVersion, latest.version)) {
-            logger.info("Already up to date.");
+            logger.info("Already up to date (v{}).", currentVersion);
             return false;
         }
 
-        logger.info("New version available: " + latest.version);
-
-        Path downloaded = downloadJar(latest.downloadUrl);
-        backupCurrentJar();
-        replaceJar(downloaded);
-
-        logger.info("Update complete.");
+        logger.info("New version available: {}", latest.version);
+        downloadJar(latest.downloadUrl);
+        logger.info("Downloaded SmsApp-new.jar — ready for swap.");
         return true;
     }
 
-    public void restartApplication()  {
-        try {
-            new ProcessBuilder("java", "-jar", localJarName)
-                    .inheritIO()
-                    .start();
-        } catch (IOException e) {
-            throw new KfsSmsException("Cannot run new process", e);
-        }
-
-        System.exit(0);
-    }
-
-    private ReleaseInfo fetchLatestRelease()  {
+    private ReleaseInfo fetchLatestRelease() {
         String url = "https://api.github.com/repos/" + owner + "/" + repo + "/releases/latest";
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -82,10 +69,12 @@ public class GitHubUpdater {
         try {
             response = client.send(request, HttpResponse.BodyHandlers.ofString());
         } catch (InterruptedException | IOException e) {
-            throw new KfsSmsException("Cannot fetch last release", e);
+            logger.warn("Cannot fetch latest release: {}", e.getMessage());
+            return null;
         }
 
         if (response.statusCode() != 200) {
+            logger.warn("GitHub API returned HTTP {}", response.statusCode());
             return null;
         }
 
@@ -104,8 +93,8 @@ public class GitHubUpdater {
         return new ReleaseInfo(version, downloadUrl);
     }
 
-    private Path downloadJar(String url) {
-        logger.info("Downloading: " + url);
+    private void downloadJar(String url) {
+        logger.info("Downloading: {}", url);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -113,48 +102,17 @@ public class GitHubUpdater {
                 .GET()
                 .build();
 
-        Path tempFile = Paths.get("SmsApp-new.jar");
+        Path target = Paths.get("SmsApp-new.jar");
 
         try {
-            client.send(request, HttpResponse.BodyHandlers.ofFile(tempFile));
+            client.send(request, HttpResponse.BodyHandlers.ofFile(target));
         } catch (IOException | InterruptedException e) {
             throw new KfsSmsException("Cannot download jar", e);
-        }
-
-        return tempFile;
-    }
-
-    private void backupCurrentJar() {
-        Path current = Paths.get(localJarName);
-        if (Files.exists(current)) {
-            Path backup = Paths.get(localJarName + ".backup");
-            if (Files.exists(backup)) {
-                try {
-                    Files.delete(backup);
-                } catch (IOException e) {
-                    throw new KfsSmsException("Cannot delete old backup", e);
-                }
-            }
-            try {
-                Files.copy(current, backup, StandardCopyOption.REPLACE_EXISTING);
-            } catch (IOException e) {
-                throw new KfsSmsException("Cannot create backup of jar", e);
-            }
-        }
-    }
-
-    private void replaceJar(Path newJar) {
-        try {
-            Files.move(newJar,
-                    Paths.get(localJarName),
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
-            throw new KfsSmsException("Cannot move jar", e);
         }
     }
 
     private boolean isNewerVersion(String current, String latest) {
+        if (current == null || current.isBlank()) return true;
         return compareVersions(latest, current) > 0;
     }
 
