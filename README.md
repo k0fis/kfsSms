@@ -234,8 +234,10 @@ Pro ruční aktualizaci:
 
 ---
 
-  1. Stáhni install.bat z: https://raw.githubusercontent.com/k0fis/kfsSms/main/install.bat
-  2. Pravý klik → Spustit jako správce
-  3. Skript stáhne vše, vytvoří config, otevře v Notepadu
-  4. Uprav config (COM port, server URL, heslo) → ulož
-  5. Spusť C:\kfsSms\run.bat
+## Rychlá instalace (TL;DR)
+
+1. Stáhni [`install.bat`](https://raw.githubusercontent.com/k0fis/kfsSms/main/install.bat)
+2. Pravý klik → **Spustit jako správce**
+3. Skript stáhne vše potřebné a otevře config v Notepadu
+4. Uprav: COM port, server URL, přihlašovací údaje → ulož
+5. Spusť `C:\kfsSms\run.bat`
