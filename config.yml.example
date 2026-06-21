@@ -1,0 +1,23 @@
+# kfsSms configuration
+sms:
+  portName: "COM3"
+  baudRate: 115200
+  pollIntervalMs: 5000
+  outgoingPollIntervalMs: 5000
+  openModem: true
+  sendMaxRetries: 3
+  sendRetryDelayMs: 5000
+  poolRetryCount: 3
+  poolRetryDelay: 5000
+
+api:
+  baseUrl: "https://sc.example.com/kfsRealBotSmss"
+  user: "sms-user"
+  password: "changeme"
+
+msisdn:
+  pin: ""
+
+update:
+  owner: "k0fis"
+  repo: "kfsSms"
