@@ -231,3 +231,11 @@ Pro ruční aktualizaci:
 | Program | Go, jeden .exe soubor (~10 MB) |
 | Vyžaduje | Windows 10/11, USB port |
 | Nevyžaduje | Java, .NET, ani žádný runtime |
+
+---
+
+  1. Stáhni install.bat z: https://raw.githubusercontent.com/k0fis/kfsSms/main/install.bat
+  2. Pravý klik → Spustit jako správce
+  3. Skript stáhne vše, vytvoří config, otevře v Notepadu
+  4. Uprav config (COM port, server URL, heslo) → ulož
+  5. Spusť C:\kfsSms\run.bat
