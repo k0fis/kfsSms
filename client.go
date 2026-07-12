@@ -75,21 +75,21 @@ func (c *SmsClient) PollOutgoing() (*OutgoingSms, error) {
 // ReportIncoming sends an incoming SMS to the server.
 func (c *SmsClient) ReportIncoming(number, text string, t time.Time) error {
 	payload := fmt.Sprintf(`{"numb":"%s","text":"%s","time":"%s"}`,
-		escapeJSON(number), escapeJSON(text), t.Format(time.RFC3339))
+		escapeJSON(number), escapeJSON(text), t.Format("2006-01-02 15:04:05"))
 	return c.post("/sms/i", payload)
 }
 
 // ConfirmSent confirms that an SMS was successfully sent.
 func (c *SmsClient) ConfirmSent(id string) error {
 	payload := fmt.Sprintf(`{"id":"%s","time":"%s"}`,
-		escapeJSON(id), time.Now().Format(time.RFC3339))
+		escapeJSON(id), time.Now().Format("2006-01-02 15:04:05"))
 	return c.post("/sms/c", payload)
 }
 
 // ReportFail reports that sending an SMS failed.
 func (c *SmsClient) ReportFail(id, msg string) error {
 	payload := fmt.Sprintf(`{"id":"%s","time":"%s","mesg":"%s"}`,
-		escapeJSON(id), time.Now().Format(time.RFC3339), escapeJSON(msg))
+		escapeJSON(id), time.Now().Format("2006-01-02 15:04:05"), escapeJSON(msg))
 	return c.post("/sms/f", payload)
 }
 
