@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,19 +35,20 @@ func main() {
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
-		log.Fatalf("[ERROR] config: %v", err)
+		slog.Error("config error", "err", err)
+		os.Exit(1)
 	}
 
-	log.Printf("[INFO] kfsSms starting version=%s port=%s", version, cfg.Sms.PortName)
+	slog.Info("kfsSms starting", "version", version, "port", cfg.Sms.PortName)
 
 	// Check for updates
 	if cfg.Update.Owner != "" && cfg.Update.Repo != "" {
 		newPath, err := CheckUpdate(cfg.Update.Owner, cfg.Update.Repo, version)
 		if err != nil {
-			log.Printf("[WARN] update check failed: %v", err)
+			slog.Warn("update check failed", "err", err)
 		}
 		if newPath != "" {
-			log.Printf("[INFO] update available, exiting for swap path=%s", newPath)
+			slog.Info("update available, exiting for swap", "path", newPath)
 			os.Exit(updateExitCode)
 		}
 	}
@@ -55,12 +56,12 @@ func main() {
 	// Open modem
 	var modem *Modem
 	if cfg.Sms.OpenModem {
-		// Auto-detect port if set to "auto" or empty
 		portName := cfg.Sms.PortName
 		if portName == "" || portName == "auto" {
 			detected, err := DetectPort(cfg.Sms.BaudRate)
 			if err != nil {
-				log.Fatalf("[ERROR] port auto-detect failed: %v", err)
+				slog.Error("port auto-detect failed", "err", err)
+				os.Exit(1)
 			}
 			portName = detected
 			cfg.Sms.PortName = portName
@@ -68,13 +69,14 @@ func main() {
 
 		modem = NewModem(portName, cfg.Sms.BaudRate)
 		if err := modem.Open(cfg.Msisdn.Pin); err != nil {
-			log.Fatalf("[ERROR] modem open failed: %v", err)
+			slog.Error("modem open failed", "err", err)
+			os.Exit(1)
 		}
 		defer modem.Close()
-		log.Printf("[INFO] modem ready port=%s", portName)
+		slog.Info("modem ready", "port", portName)
 	} else {
-		log.Printf("[WARN] modem disabled (openModem=false)")
-		modem = &Modem{} // dummy — will fail on actual operations
+		slog.Warn("modem disabled (openModem=false)")
+		modem = &Modem{}
 	}
 
 	// Create REST client
@@ -86,5 +88,5 @@ func main() {
 	defer cancel()
 
 	Run(ctx, cfg, modem, client)
-	log.Printf("[INFO] kfsSms stopped")
+	slog.Info("kfsSms stopped")
 }

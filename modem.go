@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -29,7 +29,7 @@ func DetectPort(baudRate int) (string, error) {
 		return "", fmt.Errorf("no serial ports found")
 	}
 
-	log.Printf("[INFO] scanning ports: %v", ports)
+	slog.Info("scanning ports", "ports", ports)
 
 	mode := &serial.Mode{
 		BaudRate: baudRate,
@@ -41,12 +41,11 @@ func DetectPort(baudRate int) (string, error) {
 	for _, portName := range ports {
 		port, err := serial.Open(portName, mode)
 		if err != nil {
-			log.Printf("[DEBUG] %s: cannot open: %v", portName, err)
+			slog.Debug("port cannot open", "port", portName, "err", err)
 			continue
 		}
 		port.SetReadTimeout(500 * time.Millisecond)
 
-		// Send AT and look for OK
 		port.Write([]byte("AT\r"))
 		time.Sleep(600 * time.Millisecond)
 
@@ -62,10 +61,10 @@ func DetectPort(baudRate int) (string, error) {
 		port.Close()
 
 		if strings.Contains(resp.String(), "OK") {
-			log.Printf("[INFO] modem detected on %s", portName)
+			slog.Info("modem detected", "port", portName)
 			return portName, nil
 		}
-		log.Printf("[DEBUG] %s: no AT response", portName)
+		slog.Debug("no AT response", "port", portName)
 	}
 
 	return "", fmt.Errorf("no modem found on any port (tried %d ports)", len(ports))
@@ -86,7 +85,6 @@ func (m *Modem) Open(pin string) error {
 	m.port = port
 	m.port.SetReadTimeout(100 * time.Millisecond)
 
-	// Basic init
 	if _, err := m.send("AT", 2*time.Second); err != nil {
 		return fmt.Errorf("modem handshake failed: %w", err)
 	}
@@ -111,7 +109,6 @@ func (m *Modem) Close() {
 }
 
 func (m *Modem) SendSms(number, message string) error {
-	// AT+CMGS="number" → wait for prompt '>'
 	resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, number), '>', 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("CMGS prompt failed: %w", err)
@@ -120,11 +117,9 @@ func (m *Modem) SendSms(number, message string) error {
 		return fmt.Errorf("no prompt received: %s", resp)
 	}
 
-	// Send message body + CTRL-Z
 	m.port.Write([]byte(message))
 	m.port.Write([]byte{26}) // CTRL-Z
 
-	// Wait for OK/+CMGS
 	result, err := m.readUntil("OK", 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("send timeout: %w", err)
@@ -133,7 +128,7 @@ func (m *Modem) SendSms(number, message string) error {
 		return fmt.Errorf("SMS not confirmed: %s", result)
 	}
 
-	log.Printf("[INFO] SMS sent number=%s", number)
+	slog.Info("SMS sent", "number", number)
 	return nil
 }
 
@@ -150,10 +145,8 @@ func (m *Modem) Delete(index int) error {
 	return err
 }
 
-// --- internal ---
-
 func (m *Modem) ensureSimReady(pin string) error {
-	log.Printf("[INFO] checking SIM PIN")
+	slog.Info("checking SIM PIN")
 
 	resp, err := m.send("AT+CPIN?", 5*time.Second)
 	if err != nil {
@@ -161,12 +154,12 @@ func (m *Modem) ensureSimReady(pin string) error {
 	}
 
 	if strings.Contains(resp, "READY") {
-		log.Printf("[INFO] SIM already ready")
+		slog.Info("SIM already ready")
 	} else if strings.Contains(resp, "SIM PIN") {
 		if pin == "" {
 			return fmt.Errorf("SIM requires PIN but none provided")
 		}
-		log.Printf("[INFO] sending SIM PIN")
+		slog.Info("sending SIM PIN")
 		if _, err := m.send(fmt.Sprintf(`AT+CPIN="%s"`, pin), 5*time.Second); err != nil {
 			return fmt.Errorf("PIN send failed: %w", err)
 		}
@@ -176,20 +169,19 @@ func (m *Modem) ensureSimReady(pin string) error {
 		if err != nil || !strings.Contains(verify, "READY") {
 			return fmt.Errorf("PIN not accepted: %s", verify)
 		}
-		log.Printf("[INFO] SIM unlocked")
+		slog.Info("SIM unlocked")
 	} else if strings.Contains(resp, "SIM PUK") {
 		return fmt.Errorf("SIM blocked (PUK required)")
 	} else {
 		return fmt.Errorf("unknown CPIN response: %s", resp)
 	}
 
-	// Wait for network registration
-	log.Printf("[INFO] waiting for network registration")
+	slog.Info("waiting for network registration")
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		reg, err := m.send("AT+CEREG?", 5*time.Second)
 		if err == nil && (strings.Contains(reg, ",1") || strings.Contains(reg, ",5")) {
-			log.Printf("[INFO] network registered")
+			slog.Info("network registered")
 			return nil
 		}
 		time.Sleep(5 * time.Second)

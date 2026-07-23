@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"runtime"
@@ -14,8 +14,6 @@ import (
 
 const updateExitCode = 42
 
-// CheckUpdate checks GitHub for a newer release and downloads it.
-// Returns the path to the new binary, or "" if no update available.
 func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 	if currentVersion == "dev" || currentVersion == "" {
 		return "", nil
@@ -47,11 +45,10 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
 	currentClean := strings.TrimPrefix(currentVersion, "v")
 	if compareVersions(latestVersion, currentClean) <= 0 {
-		log.Printf("[INFO] up to date version=%s", currentVersion)
+		slog.Info("up to date", "version", currentClean)
 		return "", nil
 	}
 
-	// Find the .exe asset
 	var downloadURL string
 	targetName := "kfsSms.exe"
 	if runtime.GOOS != "windows" {
@@ -67,8 +64,7 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 		return "", fmt.Errorf("no matching asset found for %s", targetName)
 	}
 
-	// Download
-	log.Printf("[INFO] downloading update version=%s", latestVersion)
+	slog.Info("downloading update", "version", latestVersion, "url", downloadURL)
 	newPath := "kfsSms-new.exe"
 	if runtime.GOOS != "windows" {
 		newPath = "kfsSms-new"
@@ -91,12 +87,10 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 
-	log.Printf("[INFO] update downloaded path=%s version=%s", newPath, latestVersion)
+	slog.Info("update downloaded", "path", newPath, "version", latestVersion)
 	return newPath, nil
 }
 
-// compareVersions compares two semantic version strings (X.Y.Z).
-// Returns: 1 if a > b, -1 if a < b, 0 if equal.
 func compareVersions(a, b string) int {
 	ap := splitVersion(a)
 	bp := splitVersion(b)

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,7 +33,6 @@ func NewSmsClient(baseUrl, user, password string) *SmsClient {
 	}
 }
 
-// PollOutgoing fetches one pending outgoing SMS from the server.
 func (c *SmsClient) PollOutgoing() (*OutgoingSms, error) {
 	req, err := http.NewRequest("GET", c.baseUrl+"/sms/o", nil)
 	if err != nil {
@@ -72,21 +71,18 @@ func (c *SmsClient) PollOutgoing() (*OutgoingSms, error) {
 	return &sms, nil
 }
 
-// ReportIncoming sends an incoming SMS to the server.
 func (c *SmsClient) ReportIncoming(number, text string, t time.Time) error {
 	payload := fmt.Sprintf(`{"numb":"%s","text":"%s","time":"%s"}`,
 		escapeJSON(number), escapeJSON(text), t.Format("2006-01-02 15:04:05"))
 	return c.post("/sms/i", payload)
 }
 
-// ConfirmSent confirms that an SMS was successfully sent.
 func (c *SmsClient) ConfirmSent(id string) error {
 	payload := fmt.Sprintf(`{"id":"%s","time":"%s"}`,
 		escapeJSON(id), time.Now().Format("2006-01-02 15:04:05"))
 	return c.post("/sms/c", payload)
 }
 
-// ReportFail reports that sending an SMS failed.
 func (c *SmsClient) ReportFail(id, msg string) error {
 	payload := fmt.Sprintf(`{"id":"%s","time":"%s","mesg":"%s"}`,
 		escapeJSON(id), time.Now().Format("2006-01-02 15:04:05"), escapeJSON(msg))
@@ -111,11 +107,11 @@ func (c *SmsClient) post(path, data string) error {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[WARN] POST failed path=%s status=%d body=%s", path, resp.StatusCode, string(body))
+		slog.Warn("POST failed", "path", path, "status", resp.StatusCode, "body", string(body))
 		return fmt.Errorf("POST %s: HTTP %d", path, resp.StatusCode)
 	}
 
-	// debug: POST ok
+	slog.Debug("POST ok", "path", path, "status", resp.StatusCode)
 	return nil
 }
 
