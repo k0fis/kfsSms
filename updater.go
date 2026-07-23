@@ -45,7 +45,8 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 	}
 
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
-	if compareVersions(latestVersion, currentVersion) <= 0 {
+	currentClean := strings.TrimPrefix(currentVersion, "v")
+	if compareVersions(latestVersion, currentClean) <= 0 {
 		log.Printf("[INFO] up to date version=%s", currentVersion)
 		return "", nil
 	}
