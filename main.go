@@ -55,12 +55,23 @@ func main() {
 	// Open modem
 	var modem *Modem
 	if cfg.Sms.OpenModem {
-		modem = NewModem(cfg.Sms.PortName, cfg.Sms.BaudRate)
+		// Auto-detect port if set to "auto" or empty
+		portName := cfg.Sms.PortName
+		if portName == "" || portName == "auto" {
+			detected, err := DetectPort(cfg.Sms.BaudRate)
+			if err != nil {
+				log.Fatalf("[ERROR] port auto-detect failed: %v", err)
+			}
+			portName = detected
+			cfg.Sms.PortName = portName
+		}
+
+		modem = NewModem(portName, cfg.Sms.BaudRate)
 		if err := modem.Open(cfg.Msisdn.Pin); err != nil {
 			log.Fatalf("[ERROR] modem open failed: %v", err)
 		}
 		defer modem.Close()
-		log.Printf("[INFO] modem ready port=%s", cfg.Sms.PortName)
+		log.Printf("[INFO] modem ready port=%s", portName)
 	} else {
 		log.Printf("[WARN] modem disabled (openModem=false)")
 		modem = &Modem{} // dummy — will fail on actual operations

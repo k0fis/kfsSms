@@ -19,6 +19,58 @@ func NewModem(portName string, baudRate int) *Modem {
 	return &Modem{portName: portName, baudRate: baudRate}
 }
 
+// DetectPort tries all available COM ports with AT command and returns the one that responds.
+func DetectPort(baudRate int) (string, error) {
+	ports, err := serial.GetPortsList()
+	if err != nil {
+		return "", fmt.Errorf("cannot list ports: %w", err)
+	}
+	if len(ports) == 0 {
+		return "", fmt.Errorf("no serial ports found")
+	}
+
+	log.Printf("[INFO] scanning ports: %v", ports)
+
+	mode := &serial.Mode{
+		BaudRate: baudRate,
+		DataBits: 8,
+		StopBits: serial.OneStopBit,
+		Parity:   serial.NoParity,
+	}
+
+	for _, portName := range ports {
+		port, err := serial.Open(portName, mode)
+		if err != nil {
+			log.Printf("[DEBUG] %s: cannot open: %v", portName, err)
+			continue
+		}
+		port.SetReadTimeout(500 * time.Millisecond)
+
+		// Send AT and look for OK
+		port.Write([]byte("AT\r"))
+		time.Sleep(600 * time.Millisecond)
+
+		buf := make([]byte, 256)
+		var resp strings.Builder
+		for {
+			n, _ := port.Read(buf)
+			if n == 0 {
+				break
+			}
+			resp.Write(buf[:n])
+		}
+		port.Close()
+
+		if strings.Contains(resp.String(), "OK") {
+			log.Printf("[INFO] modem detected on %s", portName)
+			return portName, nil
+		}
+		log.Printf("[DEBUG] %s: no AT response", portName)
+	}
+
+	return "", fmt.Errorf("no modem found on any port (tried %d ports)", len(ports))
+}
+
 func (m *Modem) Open(pin string) error {
 	mode := &serial.Mode{
 		BaudRate: m.baudRate,
