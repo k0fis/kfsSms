@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
+	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -46,7 +46,7 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
 	if compareVersions(latestVersion, currentVersion) <= 0 {
-		slog.Info("up to date", "version", currentVersion)
+		log.Printf("[INFO] up to date version=%s", currentVersion)
 		return "", nil
 	}
 
@@ -67,7 +67,7 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 	}
 
 	// Download
-	slog.Info("downloading update", "version", latestVersion, "url", downloadURL)
+	log.Printf("[INFO] downloading update version=%s", latestVersion)
 	newPath := "kfsSms-new.exe"
 	if runtime.GOOS != "windows" {
 		newPath = "kfsSms-new"
@@ -90,7 +90,7 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 		return "", fmt.Errorf("write file: %w", err)
 	}
 
-	slog.Info("update downloaded", "path", newPath, "version", latestVersion)
+	log.Printf("[INFO] update downloaded path=%s version=%s", newPath, latestVersion)
 	return newPath, nil
 }
 

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,20 +35,19 @@ func main() {
 
 	cfg, err := loadConfig(configPath)
 	if err != nil {
-		slog.Error("config error", "err", err)
-		os.Exit(1)
+		log.Fatalf("[ERROR] config: %v", err)
 	}
 
-	slog.Info("kfsSms starting", "version", version, "port", cfg.Sms.PortName)
+	log.Printf("[INFO] kfsSms starting version=%s port=%s", version, cfg.Sms.PortName)
 
 	// Check for updates
 	if cfg.Update.Owner != "" && cfg.Update.Repo != "" {
 		newPath, err := CheckUpdate(cfg.Update.Owner, cfg.Update.Repo, version)
 		if err != nil {
-			slog.Warn("update check failed", "err", err)
+			log.Printf("[WARN] update check failed: %v", err)
 		}
 		if newPath != "" {
-			slog.Info("update available, exiting for swap", "path", newPath)
+			log.Printf("[INFO] update available, exiting for swap path=%s", newPath)
 			os.Exit(updateExitCode)
 		}
 	}
@@ -58,13 +57,12 @@ func main() {
 	if cfg.Sms.OpenModem {
 		modem = NewModem(cfg.Sms.PortName, cfg.Sms.BaudRate)
 		if err := modem.Open(cfg.Msisdn.Pin); err != nil {
-			slog.Error("modem open failed", "err", err)
-			os.Exit(1)
+			log.Fatalf("[ERROR] modem open failed: %v", err)
 		}
 		defer modem.Close()
-		slog.Info("modem ready", "port", cfg.Sms.PortName)
+		log.Printf("[INFO] modem ready port=%s", cfg.Sms.PortName)
 	} else {
-		slog.Warn("modem disabled (openModem=false)")
+		log.Printf("[WARN] modem disabled (openModem=false)")
 		modem = &Modem{} // dummy — will fail on actual operations
 	}
 
@@ -77,5 +75,5 @@ func main() {
 	defer cancel()
 
 	Run(ctx, cfg, modem, client)
-	slog.Info("kfsSms stopped")
+	log.Printf("[INFO] kfsSms stopped")
 }

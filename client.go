@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -111,11 +111,11 @@ func (c *SmsClient) post(path, data string) error {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		slog.Warn("POST failed", "path", path, "status", resp.StatusCode, "body", string(body))
+		log.Printf("[WARN] POST failed path=%s status=%d body=%s", path, resp.StatusCode, string(body))
 		return fmt.Errorf("POST %s: HTTP %d", path, resp.StatusCode)
 	}
 
-	slog.Debug("POST ok", "path", path, "status", resp.StatusCode)
+	// debug: POST ok
 	return nil
 }
 

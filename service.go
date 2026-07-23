@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log/slog"
+	"log"
 	"sync"
 	"time"
 )
@@ -35,7 +35,7 @@ func Run(ctx context.Context, cfg *Config, modem *Modem, client *SmsClient) {
 	}()
 
 	<-ctx.Done()
-	slog.Info("shutting down services")
+	log.Printf("[INFO] shutting down services")
 	wg.Wait()
 }
 
@@ -51,13 +51,13 @@ func incomingLoop(ctx context.Context, cfg *Config, modem *Modem, ch chan<- SmsM
 		case <-ticker.C:
 			messages, err := modem.ReadAll()
 			if err != nil {
-				slog.Error("modem read failed", "err", err)
+				log.Printf("[ERROR] modem read failed: %v", err)
 				continue
 			}
 			for _, msg := range messages {
 				select {
 				case ch <- msg:
-					slog.Info("incoming SMS queued", "from", msg.Sender, "index", msg.Index)
+					log.Printf("[INFO] incoming SMS queued from=%s index=%d", msg.Sender, msg.Index)
 				case <-ctx.Done():
 					return
 				}
@@ -84,7 +84,7 @@ func dispatchLoop(ctx context.Context, cfg *Config, modem *Modem, client *SmsCli
 		case msg := <-ch:
 			reportWithRetry(cfg, client, msg)
 			if err := modem.Delete(msg.Index); err != nil {
-				slog.Warn("delete from modem failed", "index", msg.Index, "err", err)
+				log.Printf("[WARN] delete from modem failed index=%d err=%v", msg.Index, err)
 			}
 		}
 	}
@@ -102,22 +102,22 @@ func outgoingLoop(ctx context.Context, cfg *Config, modem *Modem, client *SmsCli
 		case <-ticker.C:
 			sms, err := client.PollOutgoing()
 			if err != nil {
-				slog.Error("poll outgoing failed", "err", err)
+				log.Printf("[ERROR] poll outgoing failed: %v", err)
 				continue
 			}
 			if sms == nil {
 				continue
 			}
 
-			slog.Info("sending SMS", "id", sms.ID, "to", sms.Numb)
+			log.Printf("[INFO] sending SMS id=%s to=%s", sms.ID, sms.Numb)
 			if err := modem.SendSms(sms.Numb, sms.Text); err != nil {
-				slog.Error("send failed", "id", sms.ID, "err", err)
+				log.Printf("[ERROR] send failed id=%s err=%v", sms.ID, err)
 				if cErr := client.ReportFail(sms.ID, err.Error()); cErr != nil {
-					slog.Error("report fail failed", "err", cErr)
+					log.Printf("[ERROR] report fail failed: %v", cErr)
 				}
 			} else {
 				if cErr := client.ConfirmSent(sms.ID); cErr != nil {
-					slog.Error("confirm sent failed", "err", cErr)
+					log.Printf("[ERROR] confirm sent failed: %v", cErr)
 				}
 			}
 		}
@@ -131,13 +131,13 @@ func reportWithRetry(cfg *Config, client *SmsClient, msg SmsMessage) {
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
 		err := client.ReportIncoming(msg.Sender, msg.Text, msg.Timestamp)
 		if err == nil {
-			slog.Info("incoming reported", "from", msg.Sender)
+			log.Printf("[INFO] incoming reported from=%s", msg.Sender)
 			return
 		}
-		slog.Warn("report incoming failed", "attempt", attempt, "err", err)
+		log.Printf("[WARN] report incoming failed attempt=%d err=%v", attempt, err)
 		if attempt <= maxRetries {
 			time.Sleep(delay)
 		}
 	}
-	slog.Error("report incoming gave up", "from", msg.Sender)
+	log.Printf("[ERROR] report incoming gave up from=%s", msg.Sender)
 }

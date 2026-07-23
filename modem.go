@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
+	"log"
 	"strings"
 	"time"
 
@@ -81,7 +81,7 @@ func (m *Modem) SendSms(number, message string) error {
 		return fmt.Errorf("SMS not confirmed: %s", result)
 	}
 
-	slog.Info("SMS sent", "number", number)
+	log.Printf("[INFO] SMS sent number=%s", number)
 	return nil
 }
 
@@ -101,7 +101,7 @@ func (m *Modem) Delete(index int) error {
 // --- internal ---
 
 func (m *Modem) ensureSimReady(pin string) error {
-	slog.Info("checking SIM PIN")
+	log.Printf("[INFO] checking SIM PIN")
 
 	resp, err := m.send("AT+CPIN?", 5*time.Second)
 	if err != nil {
@@ -109,12 +109,12 @@ func (m *Modem) ensureSimReady(pin string) error {
 	}
 
 	if strings.Contains(resp, "READY") {
-		slog.Info("SIM already ready")
+		log.Printf("[INFO] SIM already ready")
 	} else if strings.Contains(resp, "SIM PIN") {
 		if pin == "" {
 			return fmt.Errorf("SIM requires PIN but none provided")
 		}
-		slog.Info("sending SIM PIN")
+		log.Printf("[INFO] sending SIM PIN")
 		if _, err := m.send(fmt.Sprintf(`AT+CPIN="%s"`, pin), 5*time.Second); err != nil {
 			return fmt.Errorf("PIN send failed: %w", err)
 		}
@@ -124,7 +124,7 @@ func (m *Modem) ensureSimReady(pin string) error {
 		if err != nil || !strings.Contains(verify, "READY") {
 			return fmt.Errorf("PIN not accepted: %s", verify)
 		}
-		slog.Info("SIM unlocked")
+		log.Printf("[INFO] SIM unlocked")
 	} else if strings.Contains(resp, "SIM PUK") {
 		return fmt.Errorf("SIM blocked (PUK required)")
 	} else {
@@ -132,12 +132,12 @@ func (m *Modem) ensureSimReady(pin string) error {
 	}
 
 	// Wait for network registration
-	slog.Info("waiting for network registration")
+	log.Printf("[INFO] waiting for network registration")
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		reg, err := m.send("AT+CEREG?", 5*time.Second)
 		if err == nil && (strings.Contains(reg, ",1") || strings.Contains(reg, ",5")) {
-			slog.Info("network registered")
+			log.Printf("[INFO] network registered")
 			return nil
 		}
 		time.Sleep(5 * time.Second)
