@@ -91,12 +91,14 @@ func (m *Modem) Open(pin string) error {
 	if _, err := m.send("ATE0", 2*time.Second); err != nil {
 		return fmt.Errorf("echo off failed: %w", err)
 	}
-	if _, err := m.send("AT+CMGF=1", 2*time.Second); err != nil {
-		return fmt.Errorf("text mode failed: %w", err)
-	}
 
+	// PIN must be entered before CMGF works
 	if err := m.ensureSimReady(pin); err != nil {
 		return err
+	}
+
+	if _, err := m.send("AT+CMGF=1", 2*time.Second); err != nil {
+		return fmt.Errorf("text mode failed: %w", err)
 	}
 
 	return nil
