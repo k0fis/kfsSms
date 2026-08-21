@@ -264,28 +264,56 @@ func (m *Modem) sendWithError(cmd string, timeout time.Duration) (string, error)
 	return m.readUntilAny([]string{"OK", "ERROR"}, timeout)
 }
 
-func (m *Modem) readUntilAny(expected []string, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	var sb strings.Builder
-	buf := make([]byte, 256)
+func (m *Modem) readUntil(expected string, timeout time.Duration) (string, error) {
+	return m.readUntilAny([]string{expected}, timeout)
+}
 
-	for time.Now().Before(deadline) {
-		n, _ := m.port.Read(buf)
-		if n > 0 {
-			sb.Write(buf[:n])
-			s := sb.String()
-			for _, exp := range expected {
-				if strings.Contains(s, exp) {
-					return s, nil
+func (m *Modem) readUntilAny(expected []string, timeout time.Duration) (string, error) {
+	type readResult struct {
+		data []byte
+		err  error
+	}
+
+	ch := make(chan readResult, 1)
+	var sb strings.Builder
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	// Start background reader goroutine
+	go func() {
+		buf := make([]byte, 256)
+		for {
+			n, err := m.port.Read(buf)
+			if n > 0 {
+				ch <- readResult{data: append([]byte(nil), buf[:n]...), err: nil}
+			} else if err != nil {
+				ch <- readResult{data: nil, err: err}
+				return
+			}
+			// n==0, no error — port read timeout elapsed, send empty signal
+			ch <- readResult{data: nil, err: nil}
+		}
+	}()
+
+	for {
+		select {
+		case <-timer.C:
+			return sb.String(), fmt.Errorf("timeout waiting for %v, got: %s", expected, sb.String())
+		case r := <-ch:
+			if r.err != nil {
+				return sb.String(), fmt.Errorf("read error: %w", r.err)
+			}
+			if len(r.data) > 0 {
+				sb.Write(r.data)
+				s := sb.String()
+				for _, exp := range expected {
+					if strings.Contains(s, exp) {
+						return s, nil
+					}
 				}
 			}
 		}
-		if n == 0 {
-			time.Sleep(50 * time.Millisecond)
-		}
 	}
-
-	return sb.String(), fmt.Errorf("timeout waiting for %v, got: %s", expected, sb.String())
 }
 
 func (m *Modem) sendExpectPrompt(cmd string, prompt byte, timeout time.Duration) (string, error) {
@@ -297,34 +325,23 @@ func (m *Modem) writeLine(cmd string) {
 	m.port.Write([]byte(cmd + "\r"))
 }
 
-// drain discards all pending data in the serial buffer.
+// drain discards all pending data in the serial buffer (with hard 500ms limit).
 func (m *Modem) drain() {
-	buf := make([]byte, 256)
-	for {
-		n, _ := m.port.Read(buf)
-		if n == 0 {
-			break
-		}
-	}
-}
-
-func (m *Modem) readUntil(expected string, timeout time.Duration) (string, error) {
-	deadline := time.Now().Add(timeout)
-	var sb strings.Builder
-	buf := make([]byte, 256)
-
-	for time.Now().Before(deadline) {
-		n, _ := m.port.Read(buf)
-		if n > 0 {
-			sb.Write(buf[:n])
-			if strings.Contains(sb.String(), expected) {
-				return sb.String(), nil
+	done := make(chan struct{})
+	go func() {
+		buf := make([]byte, 256)
+		for {
+			n, _ := m.port.Read(buf)
+			if n == 0 {
+				break
 			}
 		}
-		if n == 0 {
-			time.Sleep(50 * time.Millisecond)
-		}
-	}
+		close(done)
+	}()
 
-	return sb.String(), fmt.Errorf("timeout waiting for %q, got: %s", expected, sb.String())
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		// drain stuck — move on
+	}
 }

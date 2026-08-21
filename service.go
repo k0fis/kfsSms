@@ -87,11 +87,19 @@ func outgoingLoop(ctx context.Context, cfg *Config, modem *Modem, client *SmsCli
 	ticker := time.NewTicker(time.Duration(cfg.Sms.OutgoingPollMs) * time.Millisecond)
 	defer ticker.Stop()
 
+	heartbeat := time.NewTicker(60 * time.Second)
+	defer heartbeat.Stop()
+	pollCount := 0
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-heartbeat.C:
+			slog.Info("heartbeat", "polls", pollCount)
+			pollCount = 0
 		case <-ticker.C:
+			pollCount++
 			sms, err := client.PollOutgoing()
 			if err != nil {
 				slog.Error("poll outgoing failed", "err", err)
