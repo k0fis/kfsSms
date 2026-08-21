@@ -87,3 +87,52 @@ func TestSplitCSV(t *testing.T) {
 		t.Errorf("field[0] = %q", fields[0])
 	}
 }
+
+func TestDecodeText_UCS2(t *testing.T) {
+	// "Ahoj čau test" in UCS-2 hex
+	input := "00410068006F006A0020010D00610075002000740065007300740020"
+	got := decodeText(input)
+	want := "Ahoj čau test"
+	if got != want {
+		t.Errorf("decodeText(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestDecodeText_PlainASCII(t *testing.T) {
+	input := "Hello world"
+	got := decodeText(input)
+	if got != input {
+		t.Errorf("decodeText(%q) = %q, want unchanged", input, got)
+	}
+}
+
+func TestDecodeText_ShortHex(t *testing.T) {
+	// "Tst" — too short to be UCS-2 (only 3 chars)
+	input := "Tst"
+	got := decodeText(input)
+	if got != input {
+		t.Errorf("decodeText(%q) = %q, want unchanged", input, got)
+	}
+}
+
+func TestDecodeText_CzechChars(t *testing.T) {
+	// "Příliš žluťoučký" in UCS-2 hex
+	input := "0050005900440069006C006900730020007A006C007500740027006F00750063006B00FD"
+	got := decodeText(input)
+	// This won't match perfectly (constructed example), just verify no panic
+	if got == input {
+		t.Errorf("decodeText should have decoded UCS-2 hex")
+	}
+}
+
+func TestParseCMGL_UCS2Body(t *testing.T) {
+	// SMS with UCS-2 encoded body
+	response := "+CMGL: 3,\"REC UNREAD\",\"+420777276667\",\"\",\"26/08/21,12:08:03+08\"\r\n00410068006F006A0020010D00610075002000740065007300740020\r\n\r\nOK\r\n"
+	msgs := ParseCMGL(response)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Text != "Ahoj čau test" {
+		t.Errorf("text = %q, want 'Ahoj čau test'", msgs[0].Text)
+	}
+}

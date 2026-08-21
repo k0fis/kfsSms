@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 type SmsMessage struct {
@@ -31,7 +33,7 @@ func ParseCMGL(response string) []SmsMessage {
 		if strings.HasPrefix(line, "+CMGL:") {
 			// Save previous message
 			if current != nil {
-				current.Text = strings.TrimSpace(body.String())
+				current.Text = decodeText(strings.TrimSpace(body.String()))
 				messages = append(messages, *current)
 			}
 
@@ -50,7 +52,7 @@ func ParseCMGL(response string) []SmsMessage {
 
 	// Save last message
 	if current != nil {
-		current.Text = strings.TrimSpace(body.String())
+		current.Text = decodeText(strings.TrimSpace(body.String()))
 		messages = append(messages, *current)
 	}
 
@@ -134,4 +136,47 @@ func parseTimestamp(raw string) time.Time {
 		return time.Now()
 	}
 	return t
+}
+
+// decodeText detects UCS-2 hex-encoded SMS text and decodes it to UTF-8.
+// Modem sends UCS-2 hex when SMS contains non-ASCII characters (e.g. Czech diacritics).
+// Example: "00410068006F006A0020010D006100750020" → "Ahoj čau "
+func decodeText(text string) string {
+	if !isUCS2Hex(text) {
+		return text
+	}
+
+	b, err := hex.DecodeString(text)
+	if err != nil {
+		return text
+	}
+
+	// Decode UTF-16BE to runes
+	if len(b)%2 != 0 {
+		return text
+	}
+
+	u16 := make([]uint16, len(b)/2)
+	for i := 0; i < len(b); i += 2 {
+		u16[i/2] = uint16(b[i])<<8 | uint16(b[i+1])
+	}
+
+	runes := utf16.Decode(u16)
+	return strings.TrimRight(string(runes), "\x00 ")
+}
+
+// isUCS2Hex checks if a string looks like UCS-2 hex encoding:
+// - only hex chars (0-9, A-F, a-f)
+// - length is multiple of 4
+// - at least 8 chars (2 UCS-2 characters minimum)
+func isUCS2Hex(s string) bool {
+	if len(s) < 8 || len(s)%4 != 0 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
