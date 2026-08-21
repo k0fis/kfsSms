@@ -85,6 +85,14 @@ func (m *Modem) Open(pin string) error {
 	m.port = port
 	m.port.SetReadTimeout(100 * time.Millisecond)
 
+	// Flush any stale data in serial buffer from previous session
+	m.drain()
+
+	// Wake up modem — send bare CR to cancel any pending command, then AT
+	m.port.Write([]byte("\r"))
+	time.Sleep(200 * time.Millisecond)
+	m.drain()
+
 	if _, err := m.send("AT", 2*time.Second); err != nil {
 		return fmt.Errorf("modem handshake failed: %w", err)
 	}
@@ -287,6 +295,17 @@ func (m *Modem) sendExpectPrompt(cmd string, prompt byte, timeout time.Duration)
 
 func (m *Modem) writeLine(cmd string) {
 	m.port.Write([]byte(cmd + "\r"))
+}
+
+// drain discards all pending data in the serial buffer.
+func (m *Modem) drain() {
+	buf := make([]byte, 256)
+	for {
+		n, _ := m.port.Read(buf)
+		if n == 0 {
+			break
+		}
+	}
 }
 
 func (m *Modem) readUntil(expected string, timeout time.Duration) (string, error) {
