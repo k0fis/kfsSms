@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -142,6 +143,7 @@ func parseTimestamp(raw string) time.Time {
 // Modem sends UCS-2 hex when SMS contains non-ASCII characters (e.g. Czech diacritics).
 // Example: "00410068006F006A0020010D006100750020" → "Ahoj čau "
 func decodeText(text string) string {
+	slog.Info("decodeText input", "len", len(text), "text", text, "isUCS2", isUCS2Hex(text))
 	if !isUCS2Hex(text) {
 		return text
 	}

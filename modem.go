@@ -147,6 +147,9 @@ func (m *Modem) ReadAll() ([]SmsMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("CMGL failed: %w", err)
 	}
+	if strings.Contains(resp, "+CMGL:") {
+		slog.Info("CMGL raw response", "len", len(resp), "resp", resp)
+	}
 	return ParseCMGL(resp), nil
 }
 
