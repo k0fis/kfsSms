@@ -24,7 +24,23 @@ jobs:
           GOARCH: amd64
         run: go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o kfsSms.exe .
 
+      - name: Build Linux ARM (Raspberry Pi 3)
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: "7"
+        run: go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o kfsSms-linux-arm .
+
+      - name: Build Linux amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o kfsSms-linux-amd64 .
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: kfsSms.exe
+          files: |
+            kfsSms.exe
+            kfsSms-linux-arm
+            kfsSms-linux-amd64
