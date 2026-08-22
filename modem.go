@@ -45,6 +45,8 @@ func DetectPort(baudRate int) (string, error) {
 			continue
 		}
 		port.SetReadTimeout(500 * time.Millisecond)
+		port.SetDTR(true)
+		port.SetRTS(true)
 
 		port.Write([]byte("AT\r"))
 		time.Sleep(600 * time.Millisecond)
@@ -78,27 +80,74 @@ func (m *Modem) Open(pin string) error {
 		Parity:   serial.NoParity,
 	}
 
-	port, err := serial.Open(m.portName, mode)
-	if err != nil {
-		return fmt.Errorf("cannot open port %s: %w", m.portName, err)
-	}
-	m.port = port
-	m.port.SetReadTimeout(100 * time.Millisecond)
+	// Retry opening modem — on Linux the USB serial port may need multiple
+	// attempts before the modem responds to AT commands (driver timing).
+	var lastErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		port, err := serial.Open(m.portName, mode)
+		if err != nil {
+			return fmt.Errorf("cannot open port %s: %w", m.portName, err)
+		}
+		port.SetReadTimeout(200 * time.Millisecond)
+		port.SetDTR(true)
+		port.SetRTS(true)
 
-	// Flush any stale data in serial buffer from previous session
-	m.drain()
+		// Flush stale data
+		buf := make([]byte, 256)
+		for {
+			n, _ := port.Read(buf)
+			if n == 0 {
+				break
+			}
+		}
 
-	// Wake up modem — send bare CR to cancel any pending command, then AT
-	m.port.Write([]byte("\r"))
-	time.Sleep(200 * time.Millisecond)
-	m.drain()
+		// Wake modem with bare CR, then try AT
+		port.Write([]byte("\r"))
+		time.Sleep(300 * time.Millisecond)
+		for {
+			n, _ := port.Read(buf)
+			if n == 0 {
+				break
+			}
+		}
 
-	if _, err := m.send("AT", 2*time.Second); err != nil {
-		return fmt.Errorf("modem handshake failed: %w", err)
+		port.Write([]byte("AT\r"))
+		time.Sleep(1 * time.Second)
+
+		var resp strings.Builder
+		for {
+			n, _ := port.Read(buf)
+			if n == 0 {
+				break
+			}
+			resp.Write(buf[:n])
+		}
+
+		if strings.Contains(resp.String(), "OK") {
+			// AT works — now send ATE0 inline
+			port.Write([]byte("ATE0\r"))
+			time.Sleep(500 * time.Millisecond)
+			for {
+				n, _ := port.Read(buf)
+				if n == 0 {
+					break
+				}
+			}
+
+			m.port = port
+			m.port.SetReadTimeout(100 * time.Millisecond)
+			slog.Info("modem ready", "attempt", attempt)
+			goto modemReady
+		}
+
+		slog.Warn("modem not responding, retrying", "attempt", attempt, "got", resp.String())
+		port.Close()
+		lastErr = fmt.Errorf("attempt %d: no OK, got: %s", attempt, resp.String())
+		time.Sleep(2 * time.Second)
 	}
-	if _, err := m.send("ATE0", 2*time.Second); err != nil {
-		return fmt.Errorf("echo off failed: %w", err)
-	}
+	return fmt.Errorf("modem handshake failed after 5 attempts: %w", lastErr)
+
+modemReady:
 
 	// PIN must be entered before CMGF works
 	if err := m.ensureSimReady(pin); err != nil {
@@ -272,51 +321,31 @@ func (m *Modem) readUntil(expected string, timeout time.Duration) (string, error
 }
 
 func (m *Modem) readUntilAny(expected []string, timeout time.Duration) (string, error) {
-	type readResult struct {
-		data []byte
-		err  error
-	}
-
-	ch := make(chan readResult, 1)
 	var sb strings.Builder
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	buf := make([]byte, 256)
+	deadline := time.Now().Add(timeout)
 
-	// Start background reader goroutine
-	go func() {
-		buf := make([]byte, 256)
-		for {
-			n, err := m.port.Read(buf)
-			if n > 0 {
-				ch <- readResult{data: append([]byte(nil), buf[:n]...), err: nil}
-			} else if err != nil {
-				ch <- readResult{data: nil, err: err}
-				return
-			}
-			// n==0, no error — port read timeout elapsed, send empty signal
-			ch <- readResult{data: nil, err: nil}
-		}
-	}()
-
-	for {
-		select {
-		case <-timer.C:
-			return sb.String(), fmt.Errorf("timeout waiting for %v, got: %s", expected, sb.String())
-		case r := <-ch:
-			if r.err != nil {
-				return sb.String(), fmt.Errorf("read error: %w", r.err)
-			}
-			if len(r.data) > 0 {
-				sb.Write(r.data)
-				s := sb.String()
-				for _, exp := range expected {
-					if strings.Contains(s, exp) {
-						return s, nil
-					}
+	for time.Now().Before(deadline) {
+		n, err := m.port.Read(buf)
+		if n > 0 {
+			sb.Write(buf[:n])
+			s := sb.String()
+			for _, exp := range expected {
+				if strings.Contains(s, exp) {
+					return s, nil
 				}
 			}
 		}
+		if err != nil && n == 0 {
+			// Real error (not just timeout with no data)
+			if err.Error() != "EOF" {
+				return sb.String(), fmt.Errorf("read error: %w", err)
+			}
+		}
+		// n==0, no error — port read timeout elapsed, loop and retry until deadline
 	}
+
+	return sb.String(), fmt.Errorf("timeout waiting for %v, got: %s", expected, sb.String())
 }
 
 func (m *Modem) sendExpectPrompt(cmd string, prompt byte, timeout time.Duration) (string, error) {
@@ -330,21 +359,12 @@ func (m *Modem) writeLine(cmd string) {
 
 // drain discards all pending data in the serial buffer (with hard 500ms limit).
 func (m *Modem) drain() {
-	done := make(chan struct{})
-	go func() {
-		buf := make([]byte, 256)
-		for {
-			n, _ := m.port.Read(buf)
-			if n == 0 {
-				break
-			}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	buf := make([]byte, 256)
+	for time.Now().Before(deadline) {
+		n, _ := m.port.Read(buf)
+		if n == 0 {
+			return
 		}
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		// drain stuck — move on
 	}
 }
