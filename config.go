@@ -12,6 +12,12 @@ type Config struct {
 	Api    ApiConfig    `yaml:"api"`
 	Msisdn MsisdnConfig `yaml:"msisdn"`
 	Update UpdateConfig `yaml:"update"`
+	Web    WebConfig    `yaml:"web"`
+}
+
+type WebConfig struct {
+	Port    int    `yaml:"port"`
+	Enabled bool   `yaml:"enabled"`
 }
 
 type SmsConfig struct {
@@ -57,6 +63,10 @@ func loadConfig(path string) (*Config, error) {
 		Update: UpdateConfig{
 			Owner: "k0fis",
 			Repo:  "kfsSms",
+		},
+		Web: WebConfig{
+			Port:    80,
+			Enabled: true,
 		},
 	}
 

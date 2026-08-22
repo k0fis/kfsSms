@@ -82,6 +82,9 @@ func main() {
 	// Create REST client
 	client := NewSmsClient(cfg.Api.BaseUrl, cfg.Api.User, cfg.Api.Password)
 
+	// Start web log viewer
+	StartWebLog(cfg)
+
 	// Run with graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
