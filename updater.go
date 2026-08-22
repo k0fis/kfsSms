@@ -50,10 +50,7 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 	}
 
 	var downloadURL string
-	targetName := "kfsSms.exe"
-	if runtime.GOOS != "windows" {
-		targetName = "kfsSms"
-	}
+	targetName := assetName()
 	for _, asset := range release.Assets {
 		if asset.Name == targetName {
 			downloadURL = asset.BrowserDownloadURL
@@ -89,6 +86,17 @@ func CheckUpdate(owner, repo, currentVersion string) (string, error) {
 
 	slog.Info("update downloaded", "path", newPath, "version", latestVersion)
 	return newPath, nil
+}
+
+// assetName returns the expected release asset name for this platform.
+func assetName() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "kfsSms.exe"
+	default:
+		// linux: kfsSms-linux-arm64, kfsSms-linux-arm, kfsSms-linux-amd64
+		return fmt.Sprintf("kfsSms-%s-%s", runtime.GOOS, runtime.GOARCH)
+	}
 }
 
 func compareVersions(a, b string) int {

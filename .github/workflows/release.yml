@@ -31,6 +31,12 @@ jobs:
           GOARM: "7"
         run: go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o kfsSms-linux-arm .
 
+      - name: Build Linux ARM64 (Raspberry Pi 4/5)
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o kfsSms-linux-arm64 .
+
       - name: Build Linux amd64
         env:
           GOOS: linux
@@ -43,4 +49,5 @@ jobs:
           files: |
             kfsSms.exe
             kfsSms-linux-arm
+            kfsSms-linux-arm64
             kfsSms-linux-amd64
