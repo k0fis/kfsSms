@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -181,4 +182,25 @@ func isUCS2Hex(s string) bool {
 		}
 	}
 	return true
+}
+
+// needsUCS2 returns true if the string contains any non-ASCII character.
+func needsUCS2(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
+// encodeUCS2Hex encodes a Go string to UCS-2 (UTF-16BE) hex representation.
+func encodeUCS2Hex(s string) string {
+	runes := []rune(s)
+	u16 := utf16.Encode(runes)
+	var sb strings.Builder
+	for _, v := range u16 {
+		sb.WriteString(fmt.Sprintf("%04X", v))
+	}
+	return sb.String()
 }

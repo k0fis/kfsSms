@@ -168,26 +168,74 @@ func (m *Modem) Close() {
 }
 
 func (m *Modem) SendSms(number, message string) error {
-	resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, number), '>', 2*time.Second)
-	if err != nil {
-		return fmt.Errorf("CMGS prompt failed: %w", err)
-	}
-	if !strings.Contains(resp, ">") {
-		return fmt.Errorf("no prompt received: %s", resp)
+	useUCS2 := needsUCS2(message)
+
+	if useUCS2 {
+		// Set Data Coding Scheme to UCS-2 (DCS=8) so modem encodes PDU correctly
+		if _, err := m.send(`AT+CSMP=17,167,0,8`, 2*time.Second); err != nil {
+			return fmt.Errorf("set CSMP UCS2 failed: %w", err)
+		}
+		// Switch to UCS-2 charset for non-ASCII messages
+		if _, err := m.send(`AT+CSCS="UCS2"`, 2*time.Second); err != nil {
+			return fmt.Errorf("set UCS2 charset failed: %w", err)
+		}
+		// Encode phone number as UCS-2 hex for CMGS
+		ucs2Number := encodeUCS2Hex(number)
+		resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, ucs2Number), '>', 2*time.Second)
+		if err != nil {
+			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
+			m.send(`AT+CSCS="GSM"`, 2*time.Second)
+			return fmt.Errorf("CMGS prompt failed: %w", err)
+		}
+		if !strings.Contains(resp, ">") {
+			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
+			m.send(`AT+CSCS="GSM"`, 2*time.Second)
+			return fmt.Errorf("no prompt received: %s", resp)
+		}
+		// Send message body as UCS-2 hex
+		m.port.Write([]byte(encodeUCS2Hex(message)))
+	} else {
+		resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, number), '>', 2*time.Second)
+		if err != nil {
+			return fmt.Errorf("CMGS prompt failed: %w", err)
+		}
+		if !strings.Contains(resp, ">") {
+			return fmt.Errorf("no prompt received: %s", resp)
+		}
+		m.port.Write([]byte(message))
 	}
 
-	m.port.Write([]byte(message))
 	m.port.Write([]byte{26}) // CTRL-Z
 
 	result, err := m.readUntil("OK", 10*time.Second)
 	if err != nil {
+		if useUCS2 {
+			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
+			m.send(`AT+CSCS="GSM"`, 2*time.Second)
+		}
 		return fmt.Errorf("send timeout: %w", err)
 	}
+	result = strings.TrimSpace(result)
 	if !strings.Contains(result, "+CMGS") {
-		return fmt.Errorf("SMS not confirmed: %s", result)
+		if !strings.Contains(result, "OK") {
+			// Neither +CMGS nor OK — real failure
+			if useUCS2 {
+				m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
+				m.send(`AT+CSCS="GSM"`, 2*time.Second)
+			}
+			return fmt.Errorf("SMS not confirmed: %s", result)
+		}
+		// Bare OK without +CMGS — modem sent it but didn't report ref number
+		slog.Warn("SMS sent (bare OK, no +CMGS ref)", "number", number, "response", result)
 	}
 
-	slog.Info("SMS sent", "number", number)
+	// Switch back to GSM charset and DCS
+	if useUCS2 {
+		m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
+		m.send(`AT+CSCS="GSM"`, 2*time.Second)
+	}
+
+	slog.Info("SMS sent", "number", number, "ucs2", useUCS2)
 	return nil
 }
 
@@ -305,7 +353,8 @@ func (m *Modem) ensureSimReady(pin string) error {
 
 func (m *Modem) send(cmd string, timeout time.Duration) (string, error) {
 	m.writeLine(cmd)
-	return m.readUntil("OK", timeout)
+	resp, err := m.readUntil("OK", timeout)
+	return strings.TrimSpace(resp), err
 }
 
 // sendWithError sends a command and accepts both OK and ERROR as valid termination.
@@ -313,7 +362,8 @@ func (m *Modem) send(cmd string, timeout time.Duration) (string, error) {
 // response contains it but err is nil (so caller can inspect the text).
 func (m *Modem) sendWithError(cmd string, timeout time.Duration) (string, error) {
 	m.writeLine(cmd)
-	return m.readUntilAny([]string{"OK", "ERROR"}, timeout)
+	resp, err := m.readUntilAny([]string{"OK", "ERROR"}, timeout)
+	return strings.TrimSpace(resp), err
 }
 
 func (m *Modem) readUntil(expected string, timeout time.Duration) (string, error) {

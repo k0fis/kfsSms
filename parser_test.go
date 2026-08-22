@@ -136,3 +136,43 @@ func TestParseCMGL_UCS2Body(t *testing.T) {
 		t.Errorf("text = %q, want 'Ahoj čau test'", msgs[0].Text)
 	}
 }
+
+func TestEncodeUCS2Hex(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Ahoj", "00410068006F006A"},
+		{"Č", "010C"},
+		{"Čus", "010C00750073"},
+		{"+420775012611", "002B003400320030003700370035003000310032003600310031"},
+	}
+	for _, tc := range tests {
+		got := encodeUCS2Hex(tc.input)
+		if got != tc.want {
+			t.Errorf("encodeUCS2Hex(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestEncodeUCS2Hex_CzechPangram(t *testing.T) {
+	input := "Příliš žluťoučký kůň úpěl ďábelské ódy"
+	encoded := encodeUCS2Hex(input)
+	// Decode it back and verify roundtrip
+	decoded := decodeText(encoded)
+	if decoded != input {
+		t.Errorf("roundtrip failed:\n  encoded: %s\n  decoded: %q\n  want:    %q", encoded, decoded, input)
+	}
+}
+
+func TestNeedsUCS2(t *testing.T) {
+	if needsUCS2("Hello world") {
+		t.Error("ASCII should not need UCS2")
+	}
+	if !needsUCS2("Čus") {
+		t.Error("Czech text should need UCS2")
+	}
+	if !needsUCS2("Příliš žluťoučký kůň úpěl ďábelské ódy") {
+		t.Error("Czech pangram should need UCS2")
+	}
+}

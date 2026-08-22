@@ -97,7 +97,7 @@ func (c *SmsClient) post(path, data string) error {
 		return err
 	}
 	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
