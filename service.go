@@ -87,7 +87,7 @@ func outgoingLoop(ctx context.Context, cfg *Config, modem *Modem, client *SmsCli
 	ticker := time.NewTicker(time.Duration(cfg.Sms.OutgoingPollMs) * time.Millisecond)
 	defer ticker.Stop()
 
-	heartbeat := time.NewTicker(60 * time.Second)
+	heartbeat := time.NewTicker(10 * time.Minute)
 	defer heartbeat.Stop()
 	pollCount := 0
 
