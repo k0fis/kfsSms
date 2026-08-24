@@ -39,6 +39,8 @@ func incomingLoop(ctx context.Context, cfg *Config, modem *Modem, ch chan<- SmsM
 	ticker := time.NewTicker(time.Duration(cfg.Sms.PollIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
+	queued := make(map[int]bool) // indices already sent to dispatch
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -49,10 +51,25 @@ func incomingLoop(ctx context.Context, cfg *Config, modem *Modem, ch chan<- SmsM
 				slog.Error("modem read failed", "err", err)
 				continue
 			}
+			// clean up indices that disappeared (deleted by dispatch)
+			present := make(map[int]bool, len(messages))
 			for _, msg := range messages {
+				present[msg.Index] = true
+			}
+			for idx := range queued {
+				if !present[idx] {
+					delete(queued, idx)
+				}
+			}
+			// queue only new messages
+			for _, msg := range messages {
+				if queued[msg.Index] {
+					continue
+				}
 				select {
 				case ch <- msg:
 					slog.Info("incoming SMS queued", "from", msg.Sender, "index", msg.Index)
+					queued[msg.Index] = true
 				case <-ctx.Done():
 					return
 				}
