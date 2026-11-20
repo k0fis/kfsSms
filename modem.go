@@ -169,7 +169,7 @@ func (m *Modem) Close() {
 
 func (m *Modem) SendSms(number, message string) error {
 	if needsUCS2(message) {
-		return m.sendSmsPDU(number, message)
+		return m.sendSmsUCS2(number, message)
 	}
 	return m.sendSmsText(number, message)
 }
@@ -190,85 +190,78 @@ func (m *Modem) sendSmsText(number, message string) error {
 	return m.waitSendResult()
 }
 
-// sendSmsPDU sends a UCS-2 SMS using PDU mode (AT+CMGF=0).
-// Handles concatenation via UDH for messages >70 chars.
-func (m *Modem) sendSmsPDU(number, message string) error {
-	// Switch to PDU mode
-	if _, err := m.send("AT+CMGF=0", 2*time.Second); err != nil {
-		return fmt.Errorf("switch to PDU mode failed: %w", err)
+// sendSmsUCS2 sends a UCS-2 SMS in text mode, splitting long messages
+// into separate 70-char SMS messages. TRM250 doesn't support PDU mode
+// (bare ERROR) and can't concatenate UCS-2 in text mode (CMS ERROR 305
+// for >70 chars). Each chunk is sent as an independent SMS.
+func (m *Modem) sendSmsUCS2(number, message string) error {
+	runes := []rune(message)
+	const maxChars = 70
+
+	// Split into 70-char chunks
+	var chunks []string
+	for i := 0; i < len(runes); i += maxChars {
+		end := i + maxChars
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[i:end]))
 	}
 
-	segments := splitUCS2Message(message)
-	total := byte(len(segments))
-	ref := byte(time.Now().UnixNano() & 0xFF)
+	slog.Info("sending UCS2 text mode", "chunks", len(chunks), "chars", len(runes))
 
-	slog.Info("sending UCS2 via PDU", "segments", total, "chars", len([]rune(message)))
-
-	var sendErr error
-	for i, seg := range segments {
-		part := byte(i + 1)
-		pduHex, tpduLen := BuildSMSSubmitPDU(number, seg, ref, total, part)
-
-		slog.Info("PDU segment prepare", "part", part, "total", total,
-			"tpduLen", tpduLen, "pduHexLen", len(pduHex), "segChars", len([]rune(seg)))
-
-		// Wait for modem to be ready — after a PDU send, the modem may be
-		// busy with async radio TX (Cat-M1 is slow) and won't respond to AT.
-		if err := m.waitModemReady(30 * time.Second); err != nil {
-			sendErr = fmt.Errorf("modem not ready before part %d/%d: %w", part, total, err)
-			break
+	for i, chunk := range chunks {
+		// Switch to UCS-2 charset
+		if _, err := m.send(`AT+CSCS="UCS2"`, 2*time.Second); err != nil {
+			return fmt.Errorf("set UCS2 charset failed (chunk %d/%d): %w", i+1, len(chunks), err)
+		}
+		// Set DCS=8 (UCS-2) — works for <=70 char messages
+		if _, err := m.send(`AT+CSMP=17,167,0,8`, 2*time.Second); err != nil {
+			return fmt.Errorf("set CSMP failed (chunk %d/%d): %w", i+1, len(chunks), err)
 		}
 
-		// Re-confirm PDU mode (modem may have reset after error/timeout)
-		if _, err := m.send("AT+CMGF=0", 2*time.Second); err != nil {
-			sendErr = fmt.Errorf("CMGF=0 failed before part %d/%d: %w", part, total, err)
-			break
-		}
-
-		resp, err := m.sendExpectPrompt(fmt.Sprintf("AT+CMGS=%d", tpduLen), '>', 5*time.Second)
+		// Phone number must be UCS-2 hex when CSCS="UCS2"
+		ucs2Number := encodeUCS2Hex(number)
+		resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, ucs2Number), '>', 2*time.Second)
 		if err != nil {
-			sendErr = fmt.Errorf("CMGS prompt failed (part %d/%d): %w", part, total, err)
-			break
+			m.resetToGSM()
+			return fmt.Errorf("CMGS prompt failed (chunk %d/%d): %w", i+1, len(chunks), err)
 		}
 		if !strings.Contains(resp, ">") {
-			sendErr = fmt.Errorf("no prompt (part %d/%d): %s", part, total, resp)
-			break
+			m.resetToGSM()
+			return fmt.Errorf("no prompt (chunk %d/%d): %s", i+1, len(chunks), resp)
 		}
 
-		m.port.Write([]byte(pduHex))
+		// Send message body as UCS-2 hex
+		m.port.Write([]byte(encodeUCS2Hex(chunk)))
 		m.port.Write([]byte{26}) // CTRL-Z
 
 		if err := m.waitSendResult(); err != nil {
-			sendErr = fmt.Errorf("part %d/%d failed: %w", part, total, err)
-			break
+			m.resetToGSM()
+			return fmt.Errorf("chunk %d/%d failed: %w", i+1, len(chunks), err)
 		}
 
-		slog.Info("PDU segment sent", "part", part, "total", total)
-	}
+		slog.Info("UCS2 chunk sent", "chunk", i+1, "total", len(chunks))
 
-	// Recover modem: ESC (cancel any stuck prompt) + drain
-	m.port.Write([]byte{27}) // ESC
-	time.Sleep(500 * time.Millisecond)
-	m.drain()
+		// Switch back to GSM between chunks
+		m.resetToGSM()
 
-	// Switch back to text mode (for incoming SMS reading via CMGL)
-	if _, err := m.send("AT+CMGF=1", 3*time.Second); err != nil {
-		slog.Warn("switch to text mode failed, retrying after AT reset", "err", err)
-		m.port.Write([]byte("\r"))
-		time.Sleep(300 * time.Millisecond)
-		m.drain()
-		m.send("AT", 2*time.Second)
-		if _, err := m.send("AT+CMGF=1", 3*time.Second); err != nil {
-			slog.Error("switch to text mode failed after retry", "err", err)
+		// Wait for modem to be ready before next chunk
+		if i < len(chunks)-1 {
+			if err := m.waitModemReady(30 * time.Second); err != nil {
+				return fmt.Errorf("modem not ready after chunk %d/%d: %w", i+1, len(chunks), err)
+			}
 		}
 	}
 
-	if sendErr != nil {
-		return sendErr
-	}
-
-	slog.Info("SMS sent", "number", number, "ucs2", true, "segments", total)
+	slog.Info("SMS sent", "number", number, "ucs2", true, "chunks", len(chunks))
 	return nil
+}
+
+// resetToGSM switches modem back to GSM charset and default DCS.
+func (m *Modem) resetToGSM() {
+	m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
+	m.send(`AT+CSCS="GSM"`, 2*time.Second)
 }
 
 // waitSendResult reads the modem response after CTRL-Z and checks for errors.
