@@ -194,6 +194,38 @@ func needsUCS2(s string) bool {
 	return false
 }
 
+// stripDiacritics replaces accented characters with their ASCII equivalents.
+// Used for long messages (>70 chars) where UCS-2 concatenation isn't supported.
+func stripDiacritics(s string) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for _, r := range s {
+		if repl, ok := diacriticMap[r]; ok {
+			sb.WriteRune(repl)
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+var diacriticMap = map[rune]rune{
+	'á': 'a', 'Á': 'A', 'à': 'a', 'À': 'A', 'â': 'a', 'Â': 'A', 'ä': 'a', 'Ä': 'A', 'ã': 'a', 'Ã': 'A',
+	'č': 'c', 'Č': 'C', 'ć': 'c', 'Ć': 'C', 'ç': 'c', 'Ç': 'C',
+	'ď': 'd', 'Ď': 'D',
+	'é': 'e', 'É': 'E', 'è': 'e', 'È': 'E', 'ê': 'e', 'Ê': 'E', 'ě': 'e', 'Ě': 'E', 'ë': 'e', 'Ë': 'E',
+	'í': 'i', 'Í': 'I', 'î': 'i', 'Î': 'I', 'ï': 'i', 'Ï': 'I',
+	'ľ': 'l', 'Ľ': 'L', 'ĺ': 'l', 'Ĺ': 'L', 'ł': 'l', 'Ł': 'L',
+	'ň': 'n', 'Ň': 'N', 'ń': 'n', 'Ń': 'N', 'ñ': 'n', 'Ñ': 'N',
+	'ó': 'o', 'Ó': 'O', 'ô': 'o', 'Ô': 'O', 'ö': 'o', 'Ö': 'O', 'õ': 'o', 'Õ': 'O',
+	'ř': 'r', 'Ř': 'R', 'ŕ': 'r', 'Ŕ': 'R',
+	'š': 's', 'Š': 'S', 'ś': 's', 'Ś': 'S',
+	'ť': 't', 'Ť': 'T',
+	'ú': 'u', 'Ú': 'U', 'ů': 'u', 'Ů': 'U', 'ü': 'u', 'Ü': 'U', 'ù': 'u', 'Ù': 'U', 'û': 'u', 'Û': 'U',
+	'ý': 'y', 'Ý': 'Y', 'ÿ': 'y',
+	'ž': 'z', 'Ž': 'Z', 'ź': 'z', 'Ź': 'Z', 'ż': 'z', 'Ż': 'Z',
+}
+
 // encodeUCS2Hex encodes a Go string to UCS-2 (UTF-16BE) hex representation.
 func encodeUCS2Hex(s string) string {
 	runes := []rune(s)

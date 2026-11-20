@@ -168,10 +168,30 @@ func (m *Modem) Close() {
 }
 
 func (m *Modem) SendSms(number, message string) error {
-	if needsUCS2(message) {
+	if !needsUCS2(message) {
+		// Pure ASCII — send in text mode, modem handles concatenation
+		return m.sendSmsText(number, message)
+	}
+
+	runes := []rune(message)
+	if len(runes) <= 70 {
+		// Short UCS-2 — fits in single SMS, text mode with DCS=8 works
 		return m.sendSmsUCS2(number, message)
 	}
-	return m.sendSmsText(number, message)
+
+	// Long UCS-2 — TRM250 can't concatenate UCS-2 (CMS ERROR 305/300, PDU ERROR).
+	// Strip diacritics → send as GSM 7-bit where modem handles concatenation.
+	stripped := stripDiacritics(message)
+	slog.Info("long UCS2 → stripped diacritics", "origChars", len(runes), "stripped", len([]rune(stripped)))
+
+	if needsUCS2(stripped) {
+		// Still has non-Latin chars after stripping (emoji, CJK, etc.)
+		// Can't do much — send as UCS-2 and hope for the best
+		slog.Warn("stripped text still needs UCS2, trying anyway")
+		return m.sendSmsUCS2(number, stripped)
+	}
+
+	return m.sendSmsText(number, stripped)
 }
 
 // sendSmsText sends an ASCII-only SMS in text mode (AT+CMGF=1).
@@ -190,18 +210,18 @@ func (m *Modem) sendSmsText(number, message string) error {
 	return m.waitSendResult()
 }
 
-// sendSmsUCS2 sends a UCS-2 SMS in text mode.
-// Sets CSCS="UCS2" and lets the modem handle DCS and concatenation.
-// No explicit CSMP DCS change — Quectel modems auto-detect from CSCS.
+// sendSmsUCS2 sends a short (≤70 char) UCS-2 SMS in text mode with DCS=8.
 func (m *Modem) sendSmsUCS2(number, message string) error {
 	slog.Info("sending UCS2 text mode", "chars", len([]rune(message)))
 
-	// Switch to UCS-2 charset — modem should auto-set DCS
+	if _, err := m.send(`AT+CSMP=17,167,0,8`, 2*time.Second); err != nil {
+		return fmt.Errorf("set CSMP UCS2 failed: %w", err)
+	}
 	if _, err := m.send(`AT+CSCS="UCS2"`, 2*time.Second); err != nil {
+		m.resetToGSM()
 		return fmt.Errorf("set UCS2 charset failed: %w", err)
 	}
 
-	// Phone number must be UCS-2 hex when CSCS="UCS2"
 	ucs2Number := encodeUCS2Hex(number)
 	resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, ucs2Number), '>', 2*time.Second)
 	if err != nil {
@@ -213,7 +233,6 @@ func (m *Modem) sendSmsUCS2(number, message string) error {
 		return fmt.Errorf("no prompt received: %s", resp)
 	}
 
-	// Send full message body as UCS-2 hex — let modem handle concatenation
 	m.port.Write([]byte(encodeUCS2Hex(message)))
 	m.port.Write([]byte{26}) // CTRL-Z
 
@@ -223,7 +242,7 @@ func (m *Modem) sendSmsUCS2(number, message string) error {
 	}
 
 	m.resetToGSM()
-	slog.Info("SMS sent", "number", number, "ucs2", true, "chars", len([]rune(message)))
+	slog.Info("SMS sent", "number", number, "ucs2", true)
 	return nil
 }
 
