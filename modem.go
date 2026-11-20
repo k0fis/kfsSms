@@ -168,86 +168,109 @@ func (m *Modem) Close() {
 }
 
 func (m *Modem) SendSms(number, message string) error {
-	useUCS2 := needsUCS2(message)
-
-	if useUCS2 {
-		// Set Data Coding Scheme to UCS-2 (DCS=8) so modem encodes PDU correctly
-		if _, err := m.send(`AT+CSMP=17,167,0,8`, 2*time.Second); err != nil {
-			return fmt.Errorf("set CSMP UCS2 failed: %w", err)
-		}
-		// Switch to UCS-2 charset for non-ASCII messages
-		if _, err := m.send(`AT+CSCS="UCS2"`, 2*time.Second); err != nil {
-			return fmt.Errorf("set UCS2 charset failed: %w", err)
-		}
-		// Encode phone number as UCS-2 hex for CMGS
-		ucs2Number := encodeUCS2Hex(number)
-		resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, ucs2Number), '>', 2*time.Second)
-		if err != nil {
-			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
-			m.send(`AT+CSCS="GSM"`, 2*time.Second)
-			return fmt.Errorf("CMGS prompt failed: %w", err)
-		}
-		if !strings.Contains(resp, ">") {
-			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
-			m.send(`AT+CSCS="GSM"`, 2*time.Second)
-			return fmt.Errorf("no prompt received: %s", resp)
-		}
-		// Send message body as UCS-2 hex
-		m.port.Write([]byte(encodeUCS2Hex(message)))
-	} else {
-		resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, number), '>', 2*time.Second)
-		if err != nil {
-			return fmt.Errorf("CMGS prompt failed: %w", err)
-		}
-		if !strings.Contains(resp, ">") {
-			return fmt.Errorf("no prompt received: %s", resp)
-		}
-		m.port.Write([]byte(message))
+	if needsUCS2(message) {
+		return m.sendSmsPDU(number, message)
 	}
+	return m.sendSmsText(number, message)
+}
 
+// sendSmsText sends an ASCII-only SMS in text mode (AT+CMGF=1).
+// The modem handles concatenation for messages >160 chars.
+func (m *Modem) sendSmsText(number, message string) error {
+	resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, number), '>', 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("CMGS prompt failed: %w", err)
+	}
+	if !strings.Contains(resp, ">") {
+		return fmt.Errorf("no prompt received: %s", resp)
+	}
+	m.port.Write([]byte(message))
 	m.port.Write([]byte{26}) // CTRL-Z
 
-	// Wait for OK or ERROR — CMS ERROR should terminate immediately, not wait for timeout
-	result, err := m.readUntilAny([]string{"OK", "ERROR"}, 10*time.Second)
-	if err != nil {
-		if useUCS2 {
-			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
-			m.send(`AT+CSCS="GSM"`, 2*time.Second)
+	return m.waitSendResult()
+}
+
+// sendSmsPDU sends a UCS-2 SMS using PDU mode (AT+CMGF=0).
+// Handles concatenation via UDH for messages >70 chars.
+func (m *Modem) sendSmsPDU(number, message string) error {
+	// Switch to PDU mode
+	if _, err := m.send("AT+CMGF=0", 2*time.Second); err != nil {
+		return fmt.Errorf("switch to PDU mode failed: %w", err)
+	}
+
+	segments := splitUCS2Message(message)
+	total := byte(len(segments))
+	ref := byte(time.Now().UnixNano() & 0xFF)
+
+	slog.Info("sending UCS2 via PDU", "segments", total, "chars", len([]rune(message)))
+
+	var sendErr error
+	for i, seg := range segments {
+		part := byte(i + 1)
+		pduHex, tpduLen := BuildSMSSubmitPDU(number, seg, ref, total, part)
+
+		resp, err := m.sendExpectPrompt(fmt.Sprintf("AT+CMGS=%d", tpduLen), '>', 2*time.Second)
+		if err != nil {
+			sendErr = fmt.Errorf("CMGS prompt failed (part %d/%d): %w", part, total, err)
+			break
 		}
+		if !strings.Contains(resp, ">") {
+			sendErr = fmt.Errorf("no prompt (part %d/%d): %s", part, total, resp)
+			break
+		}
+
+		// Send PDU hex (without SCA — modem expects just the hex after prompt)
+		// Actually, send the full hex including SCA "00" — modem expects it after >
+		m.port.Write([]byte(pduHex))
+		m.port.Write([]byte{26}) // CTRL-Z
+
+		if err := m.waitSendResult(); err != nil {
+			sendErr = fmt.Errorf("part %d/%d failed: %w", part, total, err)
+			break
+		}
+
+		slog.Info("PDU segment sent", "part", part, "total", total)
+
+		// Small delay between segments to avoid modem congestion
+		if i < len(segments)-1 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	// Always switch back to text mode (for incoming SMS reading via CMGL)
+	if _, err := m.send("AT+CMGF=1", 2*time.Second); err != nil {
+		slog.Warn("switch back to text mode failed", "err", err)
+	}
+
+	if sendErr != nil {
+		return sendErr
+	}
+
+	slog.Info("SMS sent", "number", number, "ucs2", true, "segments", total)
+	return nil
+}
+
+// waitSendResult reads the modem response after CTRL-Z and checks for errors.
+func (m *Modem) waitSendResult() error {
+	result, err := m.readUntilAny([]string{"OK", "ERROR"}, 15*time.Second)
+	if err != nil {
 		return fmt.Errorf("send timeout: %w", err)
 	}
 	result = strings.TrimSpace(result)
 
 	// Check for CMS/CME ERROR first — modem may include trailing OK after error
 	if strings.Contains(result, "+CMS ERROR") || strings.Contains(result, "+CME ERROR") {
-		m.drain() // flush any trailing OK from buffer
-		if useUCS2 {
-			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
-			m.send(`AT+CSCS="GSM"`, 2*time.Second)
-		}
+		m.drain()
 		return fmt.Errorf("SMS send error: %s", result)
 	}
 
 	if !strings.Contains(result, "+CMGS") {
 		if !strings.Contains(result, "OK") {
-			// Neither +CMGS nor OK — real failure
-			if useUCS2 {
-				m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
-				m.send(`AT+CSCS="GSM"`, 2*time.Second)
-			}
 			return fmt.Errorf("SMS not confirmed: %s", result)
 		}
-		// Bare OK without +CMGS — modem sent it but didn't report ref number
-		slog.Warn("SMS sent (bare OK, no +CMGS ref)", "number", number, "response", result)
+		slog.Warn("SMS sent (bare OK, no +CMGS ref)", "response", result)
 	}
 
-	// Switch back to GSM charset and DCS
-	if useUCS2 {
-		m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
-		m.send(`AT+CSCS="GSM"`, 2*time.Second)
-	}
-
-	slog.Info("SMS sent", "number", number, "ucs2", useUCS2)
 	return nil
 }
 
