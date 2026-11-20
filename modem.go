@@ -212,11 +212,9 @@ func (m *Modem) sendSmsPDU(number, message string) error {
 		slog.Info("PDU segment prepare", "part", part, "total", total,
 			"tpduLen", tpduLen, "pduHexLen", len(pduHex), "segChars", len([]rune(seg)))
 
-		// Drain stale data before each segment
-		m.drain()
-
-		// Verify modem is responsive before sending
-		if _, err := m.send("AT", 2*time.Second); err != nil {
+		// Wait for modem to be ready — after a PDU send, the modem may be
+		// busy with async radio TX (Cat-M1 is slow) and won't respond to AT.
+		if err := m.waitModemReady(30 * time.Second); err != nil {
 			sendErr = fmt.Errorf("modem not ready before part %d/%d: %w", part, total, err)
 			break
 		}
@@ -246,11 +244,6 @@ func (m *Modem) sendSmsPDU(number, message string) error {
 		}
 
 		slog.Info("PDU segment sent", "part", part, "total", total)
-
-		// Delay between segments — modem needs time for radio TX + network ACK
-		if i < len(segments)-1 {
-			time.Sleep(3 * time.Second)
-		}
 	}
 
 	// Recover modem: ESC (cancel any stuck prompt) + drain
@@ -415,6 +408,30 @@ func (m *Modem) ensureSimReady(pin string) error {
 
 	return fmt.Errorf("network registration timeout after %d attempts (last CEREG: %s, CSQ: %s)",
 		attempt, lastReg, strings.TrimSpace(csqFinal))
+}
+
+// waitModemReady polls with AT until the modem responds, up to timeout.
+// After a PDU send, the modem may be busy with async radio work (especially
+// on Cat-M1/LTE-M) and won't respond to AT commands for several seconds.
+func (m *Modem) waitModemReady(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	attempt := 0
+
+	for time.Now().Before(deadline) {
+		attempt++
+		m.drain()
+		_, err := m.sendWithError("AT", 2*time.Second)
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("modem ready after wait", "attempts", attempt)
+			}
+			return nil
+		}
+		slog.Debug("modem not ready, waiting", "attempt", attempt)
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("modem not responding after %d attempts (%v)", attempt, timeout)
 }
 
 func (m *Modem) send(cmd string, timeout time.Duration) (string, error) {
