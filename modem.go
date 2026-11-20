@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"go.bug.st/serial"
@@ -13,6 +14,7 @@ type Modem struct {
 	portName string
 	baudRate int
 	port     serial.Port
+	mu       sync.Mutex // serializes all AT command access
 }
 
 func NewModem(portName string, baudRate int) *Modem {
@@ -168,6 +170,9 @@ func (m *Modem) Close() {
 }
 
 func (m *Modem) SendSms(number, message string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if !needsUCS2(message) {
 		// Pure ASCII — TRM250 doesn't auto-concatenate (CMS ERROR 305 for >160 chars)
 		parts := splitMessage(message, 160)
@@ -375,7 +380,7 @@ func (m *Modem) waitSendResult() error {
 		return fmt.Errorf("SMS send error: %s", result)
 	}
 
-	if !strings.Contains(result, "+CMGS") {
+	if !strings.Contains(result, "+CMGS") && !strings.Contains(result, "+QCMGS") {
 		if !strings.Contains(result, "OK") {
 			slog.Warn("SMS not confirmed, raw response", "result", fmt.Sprintf("%q", result))
 			return fmt.Errorf("SMS not confirmed: %s", result)
@@ -387,6 +392,9 @@ func (m *Modem) waitSendResult() error {
 }
 
 func (m *Modem) ReadAll() ([]SmsMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	resp, err := m.send("AT+CMGL=\"ALL\"", 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("CMGL failed: %w", err)
@@ -398,6 +406,9 @@ func (m *Modem) ReadAll() ([]SmsMessage, error) {
 }
 
 func (m *Modem) Delete(index int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	_, err := m.send(fmt.Sprintf("AT+CMGD=%d", index), 2*time.Second)
 	return err
 }
