@@ -207,7 +207,8 @@ func (m *Modem) SendSms(number, message string) error {
 
 	m.port.Write([]byte{26}) // CTRL-Z
 
-	result, err := m.readUntil("OK", 10*time.Second)
+	// Wait for OK or ERROR — CMS ERROR should terminate immediately, not wait for timeout
+	result, err := m.readUntilAny([]string{"OK", "ERROR"}, 10*time.Second)
 	if err != nil {
 		if useUCS2 {
 			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
@@ -216,6 +217,17 @@ func (m *Modem) SendSms(number, message string) error {
 		return fmt.Errorf("send timeout: %w", err)
 	}
 	result = strings.TrimSpace(result)
+
+	// Check for CMS/CME ERROR first — modem may include trailing OK after error
+	if strings.Contains(result, "+CMS ERROR") || strings.Contains(result, "+CME ERROR") {
+		m.drain() // flush any trailing OK from buffer
+		if useUCS2 {
+			m.send(`AT+CSMP=17,167,0,0`, 2*time.Second)
+			m.send(`AT+CSCS="GSM"`, 2*time.Second)
+		}
+		return fmt.Errorf("SMS send error: %s", result)
+	}
+
 	if !strings.Contains(result, "+CMGS") {
 		if !strings.Contains(result, "OK") {
 			// Neither +CMGS nor OK — real failure
