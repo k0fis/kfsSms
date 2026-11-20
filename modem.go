@@ -160,6 +160,10 @@ modemReady:
 		return fmt.Errorf("text mode failed: %w", err)
 	}
 
+	// Reset charset to GSM defaults — modem may retain UCS-2 settings
+	// from a previous crashed session (CSCS="UCS2", CSMP DCS=8).
+	m.resetToGSM()
+
 	return nil
 }
 
