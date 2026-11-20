@@ -209,6 +209,24 @@ func (m *Modem) sendSmsPDU(number, message string) error {
 		part := byte(i + 1)
 		pduHex, tpduLen := BuildSMSSubmitPDU(number, seg, ref, total, part)
 
+		slog.Info("PDU segment prepare", "part", part, "total", total,
+			"tpduLen", tpduLen, "pduHexLen", len(pduHex), "segChars", len([]rune(seg)))
+
+		// Drain stale data before each segment
+		m.drain()
+
+		// Verify modem is responsive before sending
+		if _, err := m.send("AT", 2*time.Second); err != nil {
+			sendErr = fmt.Errorf("modem not ready before part %d/%d: %w", part, total, err)
+			break
+		}
+
+		// Re-confirm PDU mode (modem may have reset after error/timeout)
+		if _, err := m.send("AT+CMGF=0", 2*time.Second); err != nil {
+			sendErr = fmt.Errorf("CMGF=0 failed before part %d/%d: %w", part, total, err)
+			break
+		}
+
 		resp, err := m.sendExpectPrompt(fmt.Sprintf("AT+CMGS=%d", tpduLen), '>', 5*time.Second)
 		if err != nil {
 			sendErr = fmt.Errorf("CMGS prompt failed (part %d/%d): %w", part, total, err)
@@ -229,23 +247,20 @@ func (m *Modem) sendSmsPDU(number, message string) error {
 
 		slog.Info("PDU segment sent", "part", part, "total", total)
 
-		// Delay between segments — modem needs time for radio TX + network ACK.
-		// 500ms was too aggressive (modem stopped responding after 4 segments).
+		// Delay between segments — modem needs time for radio TX + network ACK
 		if i < len(segments)-1 {
 			time.Sleep(3 * time.Second)
 		}
 	}
 
-	// Recover modem before switching mode — after error or long send,
-	// modem may have stale data or be stuck in a prompt
-	m.port.Write([]byte{27}) // ESC — cancel any pending CMGS prompt
+	// Recover modem: ESC (cancel any stuck prompt) + drain
+	m.port.Write([]byte{27}) // ESC
 	time.Sleep(500 * time.Millisecond)
 	m.drain()
 
 	// Switch back to text mode (for incoming SMS reading via CMGL)
 	if _, err := m.send("AT+CMGF=1", 3*time.Second); err != nil {
 		slog.Warn("switch to text mode failed, retrying after AT reset", "err", err)
-		// Modem may be unresponsive — try AT first to wake it
 		m.port.Write([]byte("\r"))
 		time.Sleep(300 * time.Millisecond)
 		m.drain()
@@ -271,6 +286,8 @@ func (m *Modem) waitSendResult() error {
 	}
 	result = strings.TrimSpace(result)
 
+	slog.Debug("waitSendResult raw", "result", result)
+
 	// Check for CMS/CME ERROR first — modem may include trailing OK after error
 	if strings.Contains(result, "+CMS ERROR") || strings.Contains(result, "+CME ERROR") {
 		m.drain()
@@ -279,6 +296,7 @@ func (m *Modem) waitSendResult() error {
 
 	if !strings.Contains(result, "+CMGS") {
 		if !strings.Contains(result, "OK") {
+			slog.Warn("SMS not confirmed, raw response", "result", fmt.Sprintf("%q", result))
 			return fmt.Errorf("SMS not confirmed: %s", result)
 		}
 		slog.Warn("SMS sent (bare OK, no +CMGS ref)", "response", result)
