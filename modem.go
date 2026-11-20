@@ -209,7 +209,7 @@ func (m *Modem) sendSmsPDU(number, message string) error {
 		part := byte(i + 1)
 		pduHex, tpduLen := BuildSMSSubmitPDU(number, seg, ref, total, part)
 
-		resp, err := m.sendExpectPrompt(fmt.Sprintf("AT+CMGS=%d", tpduLen), '>', 2*time.Second)
+		resp, err := m.sendExpectPrompt(fmt.Sprintf("AT+CMGS=%d", tpduLen), '>', 5*time.Second)
 		if err != nil {
 			sendErr = fmt.Errorf("CMGS prompt failed (part %d/%d): %w", part, total, err)
 			break
@@ -219,8 +219,6 @@ func (m *Modem) sendSmsPDU(number, message string) error {
 			break
 		}
 
-		// Send PDU hex (without SCA — modem expects just the hex after prompt)
-		// Actually, send the full hex including SCA "00" — modem expects it after >
 		m.port.Write([]byte(pduHex))
 		m.port.Write([]byte{26}) // CTRL-Z
 
@@ -231,15 +229,30 @@ func (m *Modem) sendSmsPDU(number, message string) error {
 
 		slog.Info("PDU segment sent", "part", part, "total", total)
 
-		// Small delay between segments to avoid modem congestion
+		// Delay between segments — modem needs time for radio TX + network ACK.
+		// 500ms was too aggressive (modem stopped responding after 4 segments).
 		if i < len(segments)-1 {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(3 * time.Second)
 		}
 	}
 
-	// Always switch back to text mode (for incoming SMS reading via CMGL)
-	if _, err := m.send("AT+CMGF=1", 2*time.Second); err != nil {
-		slog.Warn("switch back to text mode failed", "err", err)
+	// Recover modem before switching mode — after error or long send,
+	// modem may have stale data or be stuck in a prompt
+	m.port.Write([]byte{27}) // ESC — cancel any pending CMGS prompt
+	time.Sleep(500 * time.Millisecond)
+	m.drain()
+
+	// Switch back to text mode (for incoming SMS reading via CMGL)
+	if _, err := m.send("AT+CMGF=1", 3*time.Second); err != nil {
+		slog.Warn("switch to text mode failed, retrying after AT reset", "err", err)
+		// Modem may be unresponsive — try AT first to wake it
+		m.port.Write([]byte("\r"))
+		time.Sleep(300 * time.Millisecond)
+		m.drain()
+		m.send("AT", 2*time.Second)
+		if _, err := m.send("AT+CMGF=1", 3*time.Second); err != nil {
+			slog.Error("switch to text mode failed after retry", "err", err)
+		}
 	}
 
 	if sendErr != nil {
