@@ -226,6 +226,42 @@ var diacriticMap = map[rune]rune{
 	'ž': 'z', 'Ž': 'Z', 'ź': 'z', 'Ź': 'Z', 'ż': 'z', 'Ż': 'Z',
 }
 
+// splitMessage splits a string into chunks of at most maxRunes runes.
+// Tries to break at word boundaries when possible.
+func splitMessage(s string, maxRunes int) []string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return []string{s}
+	}
+
+	var parts []string
+	for len(runes) > 0 {
+		end := maxRunes
+		if end > len(runes) {
+			end = len(runes)
+		}
+
+		// Try to break at a space within last 20% of the chunk
+		if end < len(runes) {
+			minBreak := end - end/5
+			bestBreak := -1
+			for i := end - 1; i >= minBreak; i-- {
+				if runes[i] == ' ' {
+					bestBreak = i + 1 // include the space in the current chunk
+					break
+				}
+			}
+			if bestBreak > 0 {
+				end = bestBreak
+			}
+		}
+
+		parts = append(parts, string(runes[:end]))
+		runes = runes[end:]
+	}
+	return parts
+}
+
 // encodeUCS2Hex encodes a Go string to UCS-2 (UTF-16BE) hex representation.
 func encodeUCS2Hex(s string) string {
 	runes := []rune(s)

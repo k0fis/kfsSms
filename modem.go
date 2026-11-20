@@ -169,8 +169,13 @@ func (m *Modem) Close() {
 
 func (m *Modem) SendSms(number, message string) error {
 	if !needsUCS2(message) {
-		// Pure ASCII — send in text mode, modem handles concatenation
-		return m.sendSmsText(number, message)
+		// Pure ASCII — TRM250 doesn't auto-concatenate (CMS ERROR 305 for >160 chars)
+		parts := splitMessage(message, 160)
+		if len(parts) == 1 {
+			return m.sendSmsText(number, message)
+		}
+		slog.Info("splitting long ASCII SMS", "totalChars", len(message), "parts", len(parts))
+		return m.sendTextParts(number, parts)
 	}
 
 	runes := []rune(message)
@@ -179,19 +184,121 @@ func (m *Modem) SendSms(number, message string) error {
 		return m.sendSmsUCS2(number, message)
 	}
 
-	// Long UCS-2 — TRM250 can't concatenate UCS-2 (CMS ERROR 305/300, PDU ERROR).
-	// Strip diacritics → send as GSM 7-bit where modem handles concatenation.
+	// Long UCS-2 — try AT+QCMGS (Quectel BG96 proprietary concatenated SMS).
+	// If QCMGS not supported, fall back to diacritics stripping + text parts.
+	slog.Info("long UCS2 SMS", "chars", len(runes))
+	parts := splitMessage(message, 67) // 67 chars per segment with UDH
+	err := m.sendSmsQCMGS(number, parts)
+	if err == nil {
+		return nil
+	}
+	slog.Warn("QCMGS failed, falling back to diacritics strip", "err", err)
+
+	// Fallback: strip diacritics → send as GSM 7-bit parts
 	stripped := stripDiacritics(message)
-	slog.Info("long UCS2 → stripped diacritics", "origChars", len(runes), "stripped", len([]rune(stripped)))
+	slog.Info("stripped diacritics fallback", "origChars", len(runes), "stripped", len([]rune(stripped)))
 
 	if needsUCS2(stripped) {
-		// Still has non-Latin chars after stripping (emoji, CJK, etc.)
-		// Can't do much — send as UCS-2 and hope for the best
-		slog.Warn("stripped text still needs UCS2, trying anyway")
-		return m.sendSmsUCS2(number, stripped)
+		// Still has non-ASCII after stripping — send as multiple short UCS-2
+		slog.Warn("stripped text still needs UCS2, sending as short UCS2 parts")
+		ucs2Parts := splitMessage(stripped, 70)
+		return m.sendUCS2Parts(number, ucs2Parts)
 	}
 
-	return m.sendSmsText(number, stripped)
+	asciiParts := splitMessage(stripped, 160)
+	return m.sendTextParts(number, asciiParts)
+}
+
+// sendTextParts sends multiple ASCII text SMS parts sequentially.
+func (m *Modem) sendTextParts(number string, parts []string) error {
+	for i, part := range parts {
+		slog.Info("sending text part", "part", i+1, "of", len(parts), "chars", len(part))
+		if err := m.sendSmsText(number, part); err != nil {
+			return fmt.Errorf("text part %d/%d failed: %w", i+1, len(parts), err)
+		}
+		if i < len(parts)-1 {
+			// Wait between parts — Cat-M1 modem needs time after each send
+			if err := m.waitModemReady(30 * time.Second); err != nil {
+				return fmt.Errorf("modem not ready after part %d: %w", i+1, err)
+			}
+		}
+	}
+	return nil
+}
+
+// sendUCS2Parts sends multiple short UCS-2 SMS parts sequentially.
+func (m *Modem) sendUCS2Parts(number string, parts []string) error {
+	for i, part := range parts {
+		slog.Info("sending UCS2 part", "part", i+1, "of", len(parts), "chars", len([]rune(part)))
+		if err := m.sendSmsUCS2(number, part); err != nil {
+			return fmt.Errorf("UCS2 part %d/%d failed: %w", i+1, len(parts), err)
+		}
+		if i < len(parts)-1 {
+			if err := m.waitModemReady(30 * time.Second); err != nil {
+				return fmt.Errorf("modem not ready after UCS2 part %d: %w", i+1, err)
+			}
+		}
+	}
+	return nil
+}
+
+// sendSmsQCMGS sends a long UCS-2 SMS using Quectel AT+QCMGS (proprietary
+// concatenated SMS in text mode). TRM250 contains a Quectel BG96 module.
+// Format: AT+QCMGS="number",<uid>,<part>,<total>
+func (m *Modem) sendSmsQCMGS(number string, parts []string) error {
+	total := len(parts)
+	uid := int(time.Now().UnixNano()&0xFF) + 1 // 1-255
+
+	slog.Info("trying QCMGS concatenated SMS", "parts", total, "uid", uid)
+
+	// Set UCS-2 mode with DCS=8
+	if _, err := m.send(`AT+CSMP=17,167,0,8`, 2*time.Second); err != nil {
+		return fmt.Errorf("set CSMP failed: %w", err)
+	}
+	if _, err := m.send(`AT+CSCS="UCS2"`, 2*time.Second); err != nil {
+		m.resetToGSM()
+		return fmt.Errorf("set CSCS UCS2 failed: %w", err)
+	}
+
+	ucs2Number := encodeUCS2Hex(number)
+
+	for i, part := range parts {
+		partNum := i + 1
+		slog.Info("QCMGS part", "part", partNum, "of", total, "chars", len([]rune(part)))
+
+		cmd := fmt.Sprintf(`AT+QCMGS="%s",%d,%d,%d`, ucs2Number, uid, partNum, total)
+		resp, err := m.sendExpectPrompt(cmd, '>', 3*time.Second)
+		if err != nil {
+			m.resetToGSM()
+			return fmt.Errorf("QCMGS prompt failed (part %d/%d): %w", partNum, total, err)
+		}
+		if !strings.Contains(resp, ">") {
+			m.resetToGSM()
+			return fmt.Errorf("QCMGS no prompt (part %d/%d): %s", partNum, total, resp)
+		}
+
+		m.port.Write([]byte(encodeUCS2Hex(part)))
+		m.port.Write([]byte{26}) // CTRL-Z
+
+		if err := m.waitSendResult(); err != nil {
+			m.resetToGSM()
+			return fmt.Errorf("QCMGS part %d/%d send failed: %w", partNum, total, err)
+		}
+
+		slog.Info("QCMGS part sent", "part", partNum, "of", total)
+
+		// Wait for modem to be ready before next segment
+		if i < len(parts)-1 {
+			if err := m.waitModemReady(30 * time.Second); err != nil {
+				m.resetToGSM()
+				return fmt.Errorf("modem not ready after QCMGS part %d: %w", partNum, err)
+			}
+		}
+	}
+
+	m.resetToGSM()
+	slog.Info("QCMGS SMS sent", "number", number, "parts", total, "uid", uid)
+	return nil
 }
 
 // sendSmsText sends an ASCII-only SMS in text mode (AT+CMGF=1).
