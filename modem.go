@@ -190,71 +190,40 @@ func (m *Modem) sendSmsText(number, message string) error {
 	return m.waitSendResult()
 }
 
-// sendSmsUCS2 sends a UCS-2 SMS in text mode, splitting long messages
-// into separate 70-char SMS messages. TRM250 doesn't support PDU mode
-// (bare ERROR) and can't concatenate UCS-2 in text mode (CMS ERROR 305
-// for >70 chars). Each chunk is sent as an independent SMS.
+// sendSmsUCS2 sends a UCS-2 SMS in text mode.
+// Sets CSCS="UCS2" and lets the modem handle DCS and concatenation.
+// No explicit CSMP DCS change — Quectel modems auto-detect from CSCS.
 func (m *Modem) sendSmsUCS2(number, message string) error {
-	runes := []rune(message)
-	const maxChars = 70
+	slog.Info("sending UCS2 text mode", "chars", len([]rune(message)))
 
-	// Split into 70-char chunks
-	var chunks []string
-	for i := 0; i < len(runes); i += maxChars {
-		end := i + maxChars
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunks = append(chunks, string(runes[i:end]))
+	// Switch to UCS-2 charset — modem should auto-set DCS
+	if _, err := m.send(`AT+CSCS="UCS2"`, 2*time.Second); err != nil {
+		return fmt.Errorf("set UCS2 charset failed: %w", err)
 	}
 
-	slog.Info("sending UCS2 text mode", "chunks", len(chunks), "chars", len(runes))
-
-	for i, chunk := range chunks {
-		// Switch to UCS-2 charset
-		if _, err := m.send(`AT+CSCS="UCS2"`, 2*time.Second); err != nil {
-			return fmt.Errorf("set UCS2 charset failed (chunk %d/%d): %w", i+1, len(chunks), err)
-		}
-		// Set DCS=8 (UCS-2) — works for <=70 char messages
-		if _, err := m.send(`AT+CSMP=17,167,0,8`, 2*time.Second); err != nil {
-			return fmt.Errorf("set CSMP failed (chunk %d/%d): %w", i+1, len(chunks), err)
-		}
-
-		// Phone number must be UCS-2 hex when CSCS="UCS2"
-		ucs2Number := encodeUCS2Hex(number)
-		resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, ucs2Number), '>', 2*time.Second)
-		if err != nil {
-			m.resetToGSM()
-			return fmt.Errorf("CMGS prompt failed (chunk %d/%d): %w", i+1, len(chunks), err)
-		}
-		if !strings.Contains(resp, ">") {
-			m.resetToGSM()
-			return fmt.Errorf("no prompt (chunk %d/%d): %s", i+1, len(chunks), resp)
-		}
-
-		// Send message body as UCS-2 hex
-		m.port.Write([]byte(encodeUCS2Hex(chunk)))
-		m.port.Write([]byte{26}) // CTRL-Z
-
-		if err := m.waitSendResult(); err != nil {
-			m.resetToGSM()
-			return fmt.Errorf("chunk %d/%d failed: %w", i+1, len(chunks), err)
-		}
-
-		slog.Info("UCS2 chunk sent", "chunk", i+1, "total", len(chunks))
-
-		// Switch back to GSM between chunks
+	// Phone number must be UCS-2 hex when CSCS="UCS2"
+	ucs2Number := encodeUCS2Hex(number)
+	resp, err := m.sendExpectPrompt(fmt.Sprintf(`AT+CMGS="%s"`, ucs2Number), '>', 2*time.Second)
+	if err != nil {
 		m.resetToGSM()
-
-		// Wait for modem to be ready before next chunk
-		if i < len(chunks)-1 {
-			if err := m.waitModemReady(30 * time.Second); err != nil {
-				return fmt.Errorf("modem not ready after chunk %d/%d: %w", i+1, len(chunks), err)
-			}
-		}
+		return fmt.Errorf("CMGS prompt failed: %w", err)
+	}
+	if !strings.Contains(resp, ">") {
+		m.resetToGSM()
+		return fmt.Errorf("no prompt received: %s", resp)
 	}
 
-	slog.Info("SMS sent", "number", number, "ucs2", true, "chunks", len(chunks))
+	// Send full message body as UCS-2 hex — let modem handle concatenation
+	m.port.Write([]byte(encodeUCS2Hex(message)))
+	m.port.Write([]byte{26}) // CTRL-Z
+
+	if err := m.waitSendResult(); err != nil {
+		m.resetToGSM()
+		return fmt.Errorf("UCS2 send failed: %w", err)
+	}
+
+	m.resetToGSM()
+	slog.Info("SMS sent", "number", number, "ucs2", true, "chars", len([]rune(message)))
 	return nil
 }
 
